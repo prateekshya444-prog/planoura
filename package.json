@@ -9,8 +9,8 @@
     "dev:frontend": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "db:init": "node -e \"require('./planora_backend_server.js')\"",
-    "test:api": "node test-api.js"
+    "db:init": "node -e \"require('./planora_backend_server.js').initDb().then(() => process.exit(0)).catch((err) => { console.error(err); process.exit(1); })\"",
+    "test:api": "node -e \"fetch('http://localhost:5000/health').then(async (r) => { if (!r.ok) process.exit(1); console.log(await r.json()); }).catch((err) => { console.error(err.message); process.exit(1); })\""
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

@@ -29,7 +29,7 @@ app.use(express.json());
 
 // Database
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/planora'
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:password@localhost:5432/planora'
 });
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -262,7 +262,12 @@ app.post('/api/onboarding/complete', authMiddleware, async (req, res) => {
       [wake_time, sleep_time, preferred_study_hours, preferred_break_duration, max_focus_session, typical_energy, req.userId]
     );
 
-    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
+    const result = await pool.query(
+      `SELECT id, email, name, wake_time, sleep_time, preferred_study_hours,
+              preferred_break_duration, max_focus_session, typical_energy
+       FROM users WHERE id = $1`,
+      [req.userId]
+    );
     res.json({ user: result.rows[0] });
   } catch (err) {
     console.error(err);
@@ -754,8 +759,14 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
     }
 
     // Get user preferences
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
+    const userResult = await pool.query(
+      'SELECT max_focus_session, preferred_break_duration FROM users WHERE id = $1',
+      [req.userId]
+    );
     const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     // Get pending tasks
     const tasksResult = await pool.query(
@@ -811,9 +822,14 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
   try {
     const { date, unfinished_tasks, available_from, available_until, energy_today } = req.body;
 
-    // Get user preferences
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
+    const userResult = await pool.query(
+      'SELECT max_focus_session, preferred_break_duration FROM users WHERE id = $1',
+      [req.userId]
+    );
     const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     // Get remaining pending tasks
     const tasksResult = await pool.query(
@@ -896,15 +912,15 @@ app.get('/api/analytics/progress', authMiddleware, async (req, res) => {
     const days = range === 'month' ? 30 : 7;
 
     const completedResult = await pool.query(
-      `SELECT COUNT(*) as count FROM tasks 
-       WHERE user_id = $1 AND status = 'completed' AND completed_at >= NOW() - INTERVAL '${days} days'`,
-      [req.userId]
+      `SELECT COUNT(*) as count FROM tasks
+       WHERE user_id = $1 AND status = 'completed' AND completed_at >= NOW() - make_interval(days => $2)`,
+      [req.userId, days]
     );
 
     const totalResult = await pool.query(
-      `SELECT COUNT(*) as count FROM tasks 
-       WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '${days} days'`,
-      [req.userId]
+      `SELECT COUNT(*) as count FROM tasks
+       WHERE user_id = $1 AND created_at >= NOW() - make_interval(days => $2)`,
+      [req.userId, days]
     );
 
     const completedCount = parseInt(completedResult.rows[0].count);
@@ -913,9 +929,9 @@ app.get('/api/analytics/progress', authMiddleware, async (req, res) => {
     // By category
     const categoryResult = await pool.query(
       `SELECT category, COUNT(*) as count FROM tasks
-       WHERE user_id = $1 AND status = 'completed' AND completed_at >= NOW() - INTERVAL '${days} days'
+       WHERE user_id = $1 AND status = 'completed' AND completed_at >= NOW() - make_interval(days => $2)
        GROUP BY category`,
-      [req.userId]
+      [req.userId, days]
     );
 
     const completionRate = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
@@ -979,7 +995,11 @@ const start = async () => {
   }
 };
 
-start();
+if (require.main === module) {
+  start();
+}
+
+module.exports = { app, pool, initDb };
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

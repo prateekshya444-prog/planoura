@@ -38,7 +38,15 @@ class APIClient {
 
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, options);
-      const data = await response.json();
+      const text = await response.text();
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(response.ok ? 'Invalid server response' : `HTTP ${response.status}`);
+        }
+      }
 
       if (!response.ok) {
         throw new Error(data.error || `HTTP ${response.status}`);
@@ -184,7 +192,7 @@ export default function PlanoraApp() {
           setScreen('today');
           loadData();
         } catch (err) {
-          localStorage.removeItem('token');
+          api.setToken(null);
           setScreen('auth');
         }
       } else {
@@ -197,6 +205,7 @@ export default function PlanoraApp() {
   const loadData = async () => {
     try {
       setLoading(true);
+      setError(null);
       const [tasksRes, planRes, eventsRes] = await Promise.all([
         api.getTasks(),
         api.getTodayPlan(),
@@ -262,6 +271,7 @@ export default function PlanoraApp() {
   };
 
   const completeTask = async (taskId) => {
+    if (!taskId) return;
     try {
       await api.completeTask(taskId);
       setTasks(tasks.map(t =>
@@ -579,13 +589,13 @@ const TodayScreen = ({ user, tasks, todayPlan, setScreen, completeTask, deleteTa
                 const highlight = isTask && (block.priority === 'high' || index === 0);
                 return (
                   <div
-                    key={block.id}
+                    key={`${block.start_time || block.start}-${block.task_id || block.type}-${index}`}
                     className={`group relative flex gap-5 py-5 transition-colors duration-200 md:gap-8 ${
                       index !== todayPlan.plan_blocks.length - 1 ? 'border-b border-[#155E63]/10' : ''
                     } ${block.completed ? 'opacity-60' : ''}`}
                   >
                     <div className="w-16 shrink-0 pt-0.5 text-right md:w-20">
-                      <div className="font-serif text-sm text-[#155E63]">{block.start_time}</div>
+                      <div className="font-serif text-sm text-[#155E63]">{block.start_time || block.start}</div>
                       <div className="mt-1 text-[11px] tracking-wide text-[#8C8272]">{block.duration_minutes}m</div>
                     </div>
                     <div className="relative w-px shrink-0 bg-[#155E63]/20">
@@ -611,7 +621,7 @@ const TodayScreen = ({ user, tasks, todayPlan, setScreen, completeTask, deleteTa
                             {block.title}
                           </div>
                           <div className="mt-1 text-sm text-[#657574]">
-                            {block.start_time} → {block.end_time}
+                            {block.start_time || block.start} → {block.end_time || block.end}
                           </div>
                         </div>
                         {isTask && (
@@ -729,13 +739,13 @@ const PlanViewScreen = ({ todayPlan, completeTask, setScreen }) => (
           <h1 className="text-3xl font-bold mb-2">Your Plan</h1>
           <p className="text-slate-600 mb-8">Tap "Mark Done" as you complete tasks</p>
           <div className="space-y-3 mb-8">
-            {todayPlan.plan_blocks.map(block => (
-              <Card key={block.id}>
+            {todayPlan.plan_blocks.map((block, index) => (
+              <Card key={`${block.start_time || block.start}-${block.task_id || block.type}-${index}`}>
                 <div className="flex items-center gap-4">
                   <div className="text-3xl">{block.icon || '📌'}</div>
                   <div className="flex-1">
                     <div className="font-bold text-slate-900">{block.title}</div>
-                    <div className="text-sm text-slate-600">{block.start_time} → {block.end_time}</div>
+                    <div className="text-sm text-slate-600">{block.start_time || block.start} → {block.end_time || block.end}</div>
                   </div>
                   {block.type === 'task' && (
                     <button

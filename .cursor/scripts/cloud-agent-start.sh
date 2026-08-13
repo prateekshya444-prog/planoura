@@ -29,4 +29,13 @@ fi
 
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'password';" >/dev/null 2>&1 || true
 
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='planora'" | grep -q 1; then
+  sudo -u postgres psql -c "CREATE USER planora WITH PASSWORD 'planora';"
+fi
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE planora TO planora;"
+sudo -u postgres psql -d planora -c "GRANT ALL ON SCHEMA public TO planora;"
+sudo -u postgres psql -d planora -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO planora;"
+sudo -u postgres psql -d planora -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO planora;"
+sudo -u postgres psql -d planora -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO planora;"
+
 echo "PostgreSQL ready (database: planora)"

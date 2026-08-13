@@ -24,7 +24,5 @@ yarn-error.log*
 *.swp
 *.swo
 
-# Coverage and caches
-coverage/
-.cache/
-.vite/
+# Accidental nested clones
+/planoura/
