@@ -2,7 +2,8 @@
  * PLANORA MVP - React Frontend with Real Backend Integration
  * 
  * This version connects to the Express backend API.
- * Set VITE_API_URL in .env to your backend URL
+ * API calls use the same origin by default (Vite proxies /api to the backend).
+ * Set VITE_API_URL only if the frontend should talk to a different backend host.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -12,7 +13,7 @@ import { ChevronRight, Plus, Clock, CheckCircle2, AlertCircle, Calendar, Trendin
 // API CLIENT
 // ============================================
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
 class APIClient {
   constructor(baseUrl) {
