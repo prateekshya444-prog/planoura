@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Clock, Calendar, TrendingUp, LogOut, Menu } from 'lucide-react';
+import { Plus, Clock, TrendingUp, LogOut, Menu } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
