@@ -1,17 +1,13 @@
 /**
  * PLANORA MVP - React Frontend with Real Backend Integration
- * 
+ *
  * This version connects to the Express backend API.
  * API calls use the same origin by default (Vite proxies /api to the backend).
  * Set VITE_API_URL only if the frontend should talk to a different backend host.
  */
 
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, Plus, Clock, CheckCircle2, AlertCircle, Calendar, TrendingUp, Settings, LogOut, Menu, Loader } from 'lucide-react';
-
-// ============================================
-// API CLIENT
-// ============================================
+import { Plus, Clock, Calendar, TrendingUp, LogOut, Menu } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -69,7 +65,6 @@ class APIClient {
     }
   }
 
-  // Auth
   async signup(email, password, name) {
     const response = await this.request('POST', '/api/auth/signup', { email, password, name });
     this.setToken(response.token);
@@ -90,12 +85,10 @@ class APIClient {
     return this.request('POST', '/api/auth/verify-token');
   }
 
-  // Onboarding
   async completeOnboarding(data) {
     return this.request('POST', '/api/onboarding/complete', data);
   }
 
-  // Tasks
   async createTask(taskData) {
     return this.request('POST', '/api/tasks', taskData);
   }
@@ -121,7 +114,6 @@ class APIClient {
     return this.request('PATCH', `/api/tasks/${id}/complete`);
   }
 
-  // Calendar
   async getCalendarEvents(startDate = null, endDate = null) {
     let url = '/api/calendar';
     const params = new URLSearchParams();
@@ -139,7 +131,6 @@ class APIClient {
     return this.request('DELETE', `/api/calendar/events/${id}`);
   }
 
-  // Planning
   async generateTodayPlan(availableFrom, availableUntil, energyToday) {
     return this.request('POST', '/api/plan/generate-today', {
       available_from: availableFrom,
@@ -160,7 +151,6 @@ class APIClient {
     return this.request('GET', '/api/plan/today');
   }
 
-  // Analytics
   async getProgress(range = 'week') {
     return this.request('GET', `/api/analytics/progress?range=${range}`);
   }
@@ -168,9 +158,51 @@ class APIClient {
 
 const api = new APIClient(API_URL);
 
-// ============================================
-// APP COMPONENT
-// ============================================
+const friendlyError = (message) => {
+  if (!message) return 'Something went quietly wrong. Please try again.';
+  if (/invalid email or password/i.test(message)) return 'That email or password doesn’t match.';
+  if (/already exists/i.test(message)) return 'An account with that email already exists.';
+  if (/missing fields|missing required/i.test(message)) return 'A few details are still needed.';
+  if (/forbidden/i.test(message)) return 'That item is no longer available.';
+  if (/HTTP \d+/i.test(message) || /invalid server response/i.test(message)) {
+    return 'We couldn’t reach Planora just now. Please try again.';
+  }
+  return message;
+};
+
+const greetingForNow = () => {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+};
+
+const formatLongDate = (value = new Date()) =>
+  new Date(value).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+const dueMeta = (due) => {
+  if (!due) return null;
+  const key = String(due).slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  if (key < today) return { label: 'Overdue', kind: 'overdue' };
+  if (key === today) return { label: 'Due today', kind: 'today' };
+  return {
+    label: new Date(`${key}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    kind: 'later'
+  };
+};
+
+const formatDateTime = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+};
 
 export default function PlanoraApp() {
   const [screen, setScreen] = useState('splash');
@@ -182,7 +214,6 @@ export default function PlanoraApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Check for existing session
   useEffect(() => {
     const checkSession = async () => {
       const token = localStorage.getItem('token');
@@ -202,6 +233,12 @@ export default function PlanoraApp() {
     };
     checkSession();
   }, []);
+
+  const goTo = (next) => {
+    setShowMenu(false);
+    setError(null);
+    setScreen(next);
+  };
 
   const loadData = async () => {
     try {
@@ -225,6 +262,7 @@ export default function PlanoraApp() {
   const handleSignUp = async (email, password, name) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.signup(email, password, name);
       setUser(response.user);
       setScreen('onboarding');
@@ -238,6 +276,7 @@ export default function PlanoraApp() {
   const handleLogin = async (email, password) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.login(email, password);
       setUser(response.user);
       setScreen('today');
@@ -255,12 +294,14 @@ export default function PlanoraApp() {
     setTasks([]);
     setTodayPlan(null);
     setCalendarEvents([]);
+    setError(null);
     setScreen('auth');
   };
 
   const addTask = async (taskData) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.createTask(taskData);
       setTasks([...tasks, response.task]);
       setScreen('today');
@@ -303,6 +344,7 @@ export default function PlanoraApp() {
   const generateTodayPlan = async (availableFrom, availableUntil, energyToday) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.generateTodayPlan(availableFrom, availableUntil, energyToday);
       setTodayPlan(response.plan);
       setScreen('plan-view');
@@ -316,6 +358,7 @@ export default function PlanoraApp() {
   const replan = async (availableFrom, availableUntil, energyToday) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.replantToday(availableFrom, availableUntil, energyToday);
       setTodayPlan(response.plan);
       setScreen('plan-view');
@@ -326,17 +369,43 @@ export default function PlanoraApp() {
     }
   };
 
-  // ============================================
-  // SCREENS
-  // ============================================
+  const addCalendarEvent = async (eventData) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await api.addCalendarEvent(eventData);
+      setCalendarEvents([...calendarEvents, response.event]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteCalendarEvent = async (id) => {
+    try {
+      await api.deleteCalendarEvent(id);
+      setCalendarEvents(calendarEvents.filter((event) => event.id !== id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const shell = {
+    user,
+    screen,
+    showMenu,
+    setShowMenu,
+    handleLogout,
+    goTo
+  };
 
   if (screen === 'splash') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-[#FBF8EF] px-6">
         <div className="text-center">
-          <div className="text-6xl mb-4 animate-bounce">🌷</div>
-          <h1 className="text-3xl font-bold text-slate-900">Planora</h1>
-          <p className="text-slate-600 mt-2">Plan your day. Protect your time.</p>
+          <p className="font-serif text-lg tracking-[0.28em] text-[#155E63]">Planora</p>
+          <p className="mt-4 text-sm tracking-[0.18em] uppercase text-[#6F9691]">Plan your day. Protect your time.</p>
         </div>
       </div>
     );
@@ -347,50 +416,127 @@ export default function PlanoraApp() {
   }
 
   if (screen === 'onboarding') {
-    return <OnboardingScreen user={user} setUser={setUser} onComplete={() => { setScreen('today'); loadData(); }} />;
+    return <OnboardingScreen onComplete={() => { setScreen('today'); loadData(); }} />;
   }
 
   if (screen === 'today') {
-    return <TodayScreen user={user} tasks={tasks} todayPlan={todayPlan} setScreen={setScreen} completeTask={completeTask} deleteTask={deleteTask} showMenu={showMenu} setShowMenu={setShowMenu} handleLogout={handleLogout} loading={loading} error={error} />;
+    return (
+      <TodayScreen
+        {...shell}
+        tasks={tasks}
+        todayPlan={todayPlan}
+        completeTask={completeTask}
+        deleteTask={deleteTask}
+        loading={loading}
+        error={error}
+      />
+    );
   }
 
   if (screen === 'add-task') {
-    return <AddTaskScreen onSubmit={(data) => { addTask(data); }} onBack={() => setScreen('today')} loading={loading} />;
+    return (
+      <AppShell {...shell} title="Add a task">
+        <AddTaskScreen onSubmit={addTask} loading={loading} error={error} />
+      </AppShell>
+    );
   }
 
   if (screen === 'plan-input') {
-    return <PlanInputScreen onSubmit={generateTodayPlan} onBack={() => setScreen('today')} loading={loading} />;
+    return (
+      <AppShell {...shell} title="Plan my day">
+        <PlanInputScreen onSubmit={generateTodayPlan} loading={loading} error={error} />
+      </AppShell>
+    );
   }
 
   if (screen === 'plan-view') {
-    return <PlanViewScreen todayPlan={todayPlan} completeTask={completeTask} setScreen={setScreen} />;
+    return (
+      <AppShell {...shell} title="Today’s plan">
+        <PlanViewScreen todayPlan={todayPlan} completeTask={completeTask} goTo={goTo} />
+      </AppShell>
+    );
   }
 
   if (screen === 'replan') {
-    return <ReplanScreen onSubmit={replan} onBack={() => setScreen('plan-view')} loading={loading} />;
+    return (
+      <AppShell {...shell} title="Adjust your plan">
+        <ReplanScreen onSubmit={replan} loading={loading} error={error} />
+      </AppShell>
+    );
   }
 
   if (screen === 'progress') {
-    return <ProgressScreen tasks={tasks} onBack={() => setScreen('today')} />;
+    return (
+      <AppShell {...shell} title="Progress">
+        <ProgressScreen tasks={tasks} />
+      </AppShell>
+    );
   }
 
-  return <TodayScreen user={user} tasks={tasks} todayPlan={todayPlan} setScreen={setScreen} completeTask={completeTask} deleteTask={deleteTask} showMenu={showMenu} setShowMenu={setShowMenu} handleLogout={handleLogout} loading={loading} error={error} />;
+  if (screen === 'calendar') {
+    return (
+      <AppShell {...shell} title="Calendar">
+        <CalendarScreen
+          events={calendarEvents}
+          onSubmit={addCalendarEvent}
+          onDelete={deleteCalendarEvent}
+          loading={loading}
+          error={error}
+        />
+      </AppShell>
+    );
+  }
+
+  return (
+    <TodayScreen
+      {...shell}
+      tasks={tasks}
+      todayPlan={todayPlan}
+      completeTask={completeTask}
+      deleteTask={deleteTask}
+      loading={loading}
+      error={error}
+    />
+  );
 }
 
-// ============================================
-// SCREEN COMPONENTS
-// ============================================
+const AppShell = ({ children, title, user, screen, showMenu, setShowMenu, handleLogout, goTo }) => (
+  <div className="min-h-screen bg-[#FBF8EF] text-[#173B3D]">
+    <TopNav
+      user={user}
+      screen={screen}
+      showMenu={showMenu}
+      setShowMenu={setShowMenu}
+      handleLogout={handleLogout}
+      goTo={goTo}
+    />
+    <div className="mx-auto max-w-4xl px-5 pb-28 pt-8 md:px-8 md:pb-16 md:pt-10">
+      <BackLink onClick={() => goTo('today')} />
+      {title && (
+        <h1 className="mt-4 font-serif text-[1.85rem] font-medium leading-tight text-[#173B3D] md:text-[2.1rem]">
+          {title}
+        </h1>
+      )}
+      <div className="mt-8">{children}</div>
+    </div>
+    <MobileDock screen={screen} goTo={goTo} />
+  </div>
+);
 
 const AuthScreen = ({ onSignUp, onLogin, loading, error }) => (
-  <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center p-4">
+  <div className="flex min-h-screen items-center justify-center bg-[#FBF8EF] px-5 py-12">
     <div className="w-full max-w-md">
-      <div className="text-center mb-8">
-        <div className="text-5xl mb-2">🌷</div>
-        <h1 className="text-3xl font-bold text-slate-900">Planora</h1>
-        <p className="text-slate-600 mt-2">Plan your day. Protect your time.</p>
+      <p className="font-serif text-lg tracking-[0.22em] text-[#155E63]">Planora</p>
+      <h1 className="mt-6 font-serif text-[2rem] font-medium leading-tight text-[#173B3D]">
+        Plan your day.<br />Protect your time.
+      </h1>
+      <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-[#657574]">
+        A calm place to turn a crowded task list into a day you can actually keep.
+      </p>
+      <ErrorBanner message={error} />
+      <div className="mt-8">
+        <AuthForm onSignUp={onSignUp} onLogin={onLogin} loading={loading} />
       </div>
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">{error}</div>}
-      <AuthForm onSignUp={onSignUp} onLogin={onLogin} loading={loading} />
     </div>
   </div>
 );
@@ -411,74 +557,50 @@ const AuthForm = ({ onSignUp, onLogin, loading }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-5">
       {mode === 'signup' && (
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-            disabled={loading}
-            required
-          />
+          <label className="planora-label">Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" className="planora-input" disabled={loading} required />
         </div>
       )}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="your@email.com"
-          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-          disabled={loading}
-          required
-        />
+        <label className="planora-label">Email</label>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@university.edu" className="planora-input" disabled={loading} required />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Password</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="••••••••"
-          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-          disabled={loading}
-          required
-        />
+        <label className="planora-label">Password</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="planora-input" disabled={loading} required />
       </div>
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium disabled:opacity-50"
-      >
-        {loading ? 'Loading...' : mode === 'login' ? 'Log In' : 'Sign Up'}
-      </button>
+      <PrimaryButton type="submit" disabled={loading} className="w-full">
+        {loading ? 'One moment…' : mode === 'login' ? 'Log in' : 'Create account'}
+      </PrimaryButton>
       <button
         type="button"
         onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
         disabled={loading}
-        className="w-full py-2 text-slate-600 hover:text-slate-900 text-sm disabled:opacity-50"
+        className="w-full py-3 text-sm tracking-wide text-[#657574] transition duration-200 hover:text-[#155E63] disabled:opacity-50"
       >
-        {mode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Log in'}
+        {mode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
       </button>
     </form>
   );
 };
 
-const OnboardingScreen = ({ user, setUser, onComplete }) => {
+const OnboardingScreen = ({ onComplete }) => {
   const [wakeTime, setWakeTime] = useState('08:00');
   const [sleepTime, setSleepTime] = useState('23:00');
   const [energy, setEnergy] = useState('medium');
   const [breakDuration, setBreakDuration] = useState('15');
   const [maxFocus, setMaxFocus] = useState('90');
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      setSaving(true);
+      setError(null);
       await api.completeOnboarding({
         wake_time: wakeTime,
         sleep_time: sleepTime,
@@ -488,381 +610,476 @@ const OnboardingScreen = ({ user, setUser, onComplete }) => {
       });
       onComplete();
     } catch (err) {
-      alert('Error: ' + err.message);
+      setError(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-white p-6">
-      <div className="max-w-2xl mx-auto py-8">
-        <h1 className="text-2xl font-bold mb-2">Let's get you set up</h1>
-        <p className="text-slate-600 mb-8">Tell us a bit about your schedule</p>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <Card>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Wake up time</label>
-            <input type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" />
-          </Card>
-
-          <Card>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Sleep time</label>
-            <input type="time" value={sleepTime} onChange={(e) => setSleepTime(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" />
-          </Card>
-
-          <Card>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Energy level</label>
-            <div className="flex gap-3">
-              {['low', 'medium', 'high'].map(e => (
-                <button
-                  key={e}
-                  type="button"
-                  onClick={() => setEnergy(e)}
-                  className={`px-4 py-2 rounded-lg font-medium transition ${energy === e ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
-                >
-                  {e === 'low' ? '🔴' : e === 'medium' ? '🟡' : '🟢'} {e}
-                </button>
-              ))}
+    <div className="min-h-screen bg-[#FBF8EF] px-5 py-12 text-[#173B3D] md:px-8">
+      <div className="mx-auto max-w-2xl">
+        <p className="text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">Welcome</p>
+        <h1 className="mt-4 font-serif text-[2rem] font-medium leading-tight">A few quiet preferences</h1>
+        <p className="mt-4 max-w-lg text-[15px] leading-relaxed text-[#657574]">
+          Planora uses these to keep your schedule realistic — never packed beyond the time you actually have.
+        </p>
+        <ErrorBanner message={error} />
+        <form onSubmit={handleSubmit} className="mt-10 space-y-8">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <div>
+              <label className="planora-label">Wake time</label>
+              <input type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} className="planora-input" />
             </div>
-          </Card>
-
-          <button type="submit" className="w-full py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium">
-            Let's Go
-          </button>
+            <div>
+              <label className="planora-label">Sleep time</label>
+              <input type="time" value={sleepTime} onChange={(e) => setSleepTime(e.target.value)} className="planora-input" />
+            </div>
+            <div>
+              <label className="planora-label">Preferred break</label>
+              <input type="number" min="5" value={breakDuration} onChange={(e) => setBreakDuration(e.target.value)} className="planora-input" />
+            </div>
+            <div>
+              <label className="planora-label">Max focus session</label>
+              <input type="number" min="15" value={maxFocus} onChange={(e) => setMaxFocus(e.target.value)} className="planora-input" />
+            </div>
+          </div>
+          <div>
+            <p className="planora-label">Typical energy</p>
+            <ChoiceRow value={energy} onChange={setEnergy} options={['low', 'medium', 'high']} />
+          </div>
+          <PrimaryButton type="submit" disabled={saving} className="w-full md:w-auto">
+            {saving ? 'Saving…' : 'Begin'}
+          </PrimaryButton>
         </form>
       </div>
     </div>
   );
 };
 
-const TodayScreen = ({ user, tasks, todayPlan, setScreen, completeTask, deleteTask, showMenu, setShowMenu, handleLogout, loading, error }) => {
-  const completedCount = tasks.filter(t => t.status === 'completed').length;
+const TodayScreen = ({
+  user,
+  tasks,
+  todayPlan,
+  completeTask,
+  deleteTask,
+  loading,
+  error,
+  screen,
+  showMenu,
+  setShowMenu,
+  handleLogout,
+  goTo
+}) => {
+  const pending = tasks.filter((t) => t.status === 'pending');
+  const completedCount = tasks.filter((t) => t.status === 'completed').length;
   const totalCount = tasks.length;
+  const remaining = totalCount - completedCount;
 
   return (
     <div className="min-h-screen bg-[#FBF8EF] text-[#173B3D]">
-      <TopNav user={user} showMenu={showMenu} setShowMenu={setShowMenu} handleLogout={handleLogout} setScreen={setScreen} />
-      <div className="max-w-4xl mx-auto px-5 md:px-8 pb-16">
-        {error && (
-          <div className="mt-6 border border-[#D7C58A] bg-[#F8EDBF]/70 px-4 py-3 text-sm text-[#103F43]">
-            {error}
-          </div>
-        )}
+      <TopNav
+        user={user}
+        screen={screen}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+        handleLogout={handleLogout}
+        goTo={goTo}
+      />
+      <div className="mx-auto max-w-4xl px-5 pb-28 pt-10 md:px-8 md:pb-16 md:pt-14">
+        <ErrorBanner message={error} />
 
-        <div className="pt-12 pb-10 md:pt-16 md:pb-14">
-          <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">Today</p>
-          <h1 className="mt-4 font-serif text-[2rem] md:text-[2.35rem] font-medium leading-tight text-[#173B3D]">
-            Good morning, {user?.name} 🌷
+        <header className="pb-10 md:pb-14">
+          <p className="text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">{formatLongDate()}</p>
+          <h1 className="mt-4 max-w-2xl font-serif text-[2rem] font-medium leading-[1.15] text-[#173B3D] md:text-[2.45rem]">
+            {greetingForNow()}, {user?.name}
           </h1>
-          <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-[#657574]">Let's make today count</p>
+          <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-[#657574]">
+            {todayPlan
+              ? 'Your day is arranged. Move through it one block at a time.'
+              : 'Nothing is wrong — the day simply hasn’t been planned yet.'}
+          </p>
+        </header>
+
+        <div className="mb-12 grid grid-cols-2 border border-[#155E63]/15 bg-white/50 md:grid-cols-4">
+          <Stat label="Completed" value={completedCount} accent />
+          <Stat label="Remaining" value={remaining} />
+          <Stat label="All tasks" value={totalCount} />
+          <Stat label="Today’s plan" value={todayPlan ? 'Set' : 'Open'} accent={Boolean(todayPlan)} last />
         </div>
 
-        <div className="mb-12 grid grid-cols-2 border border-[#155E63]/15 bg-white/60 md:grid-cols-4">
-          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Tasks Completed</div>
-            <div className="mt-3 font-serif text-3xl text-[#155E63]">{completedCount}</div>
-          </div>
-          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Tasks Remaining</div>
-            <div className="mt-3 font-serif text-3xl text-[#173B3D]">{totalCount - completedCount}</div>
-          </div>
-          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Total Tasks</div>
-            <div className="mt-3 font-serif text-3xl text-[#173B3D]">{totalCount}</div>
-          </div>
-          <div className="px-5 py-5">
-            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Planned Today</div>
-            <div className="mt-3 font-serif text-3xl text-[#155E63]">{todayPlan ? '✓' : '—'}</div>
-          </div>
-        </div>
-
-        {todayPlan ? (
-          <section className="mb-12 border border-[#155E63]/15 bg-white/70 px-5 py-8 md:px-8 md:py-10">
+        {loading && !todayPlan && pending.length === 0 ? (
+          <TodaySkeleton />
+        ) : todayPlan && todayPlan.plan_blocks && todayPlan.plan_blocks.length > 0 ? (
+          <section className="mb-14">
             <div className="mb-8 flex items-end justify-between gap-4">
               <div>
-                <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">Agenda</p>
-                <h2 className="mt-2 font-serif text-2xl font-medium text-[#173B3D]">Today's Plan</h2>
+                <p className="text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">Agenda</p>
+                <h2 className="mt-2 font-serif text-2xl font-medium">Today’s plan</h2>
               </div>
             </div>
-            <div className="mb-8">
-              {todayPlan.plan_blocks.map((block, index) => {
-                const isTask = block.type === 'task';
-                const isBreak = block.type === 'break';
-                const highlight = isTask && (block.priority === 'high' || index === 0);
-                return (
-                  <div
-                    key={`${block.start_time || block.start}-${block.task_id || block.type}-${index}`}
-                    className={`group relative flex gap-5 py-5 transition-colors duration-200 md:gap-8 ${
-                      index !== todayPlan.plan_blocks.length - 1 ? 'border-b border-[#155E63]/10' : ''
-                    } ${block.completed ? 'opacity-60' : ''}`}
-                  >
-                    <div className="w-16 shrink-0 pt-0.5 text-right md:w-20">
-                      <div className="font-serif text-sm text-[#155E63]">{block.start_time || block.start}</div>
-                      <div className="mt-1 text-[11px] tracking-wide text-[#8C8272]">{block.duration_minutes}m</div>
-                    </div>
-                    <div className="relative w-px shrink-0 bg-[#155E63]/20">
-                      <span
-                        className={`absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border ${
-                          highlight
-                            ? 'border-[#D7C58A] bg-[#F3E6A5]'
-                            : isBreak
-                              ? 'border-[#6F9691] bg-[#FBF8EF]'
-                              : 'border-[#155E63] bg-[#155E63]'
-                        }`}
-                      />
-                    </div>
-                    <div
-                      className={`min-w-0 flex-1 px-4 py-2 transition duration-200 ${
-                        highlight && !block.completed ? 'bg-[#F8EDBF]/60' : ''
-                      }`}
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="text-xl leading-none">{block.icon || '📌'}</div>
-                        <div className="min-w-0 flex-1">
-                          <div className={`font-medium text-[#173B3D] ${block.completed ? 'line-through decoration-[#6F9691]/70' : ''}`}>
-                            {block.title}
-                          </div>
-                          <div className="mt-1 text-sm text-[#657574]">
-                            {block.start_time || block.start} → {block.end_time || block.end}
-                          </div>
-                        </div>
-                        {isTask && (
-                          <button
-                            onClick={() => completeTask(block.task_id)}
-                            className={`shrink-0 border px-3.5 py-1.5 text-xs tracking-[0.12em] uppercase transition duration-200 ${
-                              block.completed
-                                ? 'border-[#6F9691]/40 bg-transparent text-[#6F9691]'
-                                : 'border-[#155E63] bg-[#155E63] text-[#FBF8EF] hover:-translate-y-px hover:bg-[#103F43]'
-                            }`}
-                          >
-                            {block.completed ? '✓ Done' : 'Mark Done'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="mb-6 border-t border-[#155E63]/10 pt-5 text-sm italic leading-relaxed text-[#657574]">💡 {todayPlan.reasoning}</p>
-            <button
-              onClick={() => setScreen('replan')}
-              className="w-full border border-[#155E63] bg-[#155E63] px-6 py-3 text-sm tracking-[0.16em] uppercase text-[#FBF8EF] transition duration-200 hover:-translate-y-px hover:bg-[#103F43]"
-            >
-              Replan My Day
-            </button>
+            <AgendaTimeline plan={todayPlan} tasks={tasks} completeTask={completeTask} />
+            {todayPlan.reasoning && (
+              <p className="mt-8 max-w-2xl border-t border-[#155E63]/10 pt-5 text-sm italic leading-relaxed text-[#657574]">
+                {todayPlan.reasoning}
+              </p>
+            )}
+            <PrimaryButton onClick={() => goTo('replan')} className="mt-8 w-full md:w-auto">
+              Replan my day
+            </PrimaryButton>
           </section>
         ) : (
-          <section className="mb-12 border border-[#155E63]/15 bg-white/70 px-6 py-14 text-center md:px-10">
-            <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-[#F8EDBF] ring-1 ring-[#D7C58A]/80">
-              <Clock className="h-7 w-7 text-[#155E63]" />
+          <section className="mb-14 py-6 md:py-10">
+            <Clock className="h-6 w-6 text-[#155E63]" />
+            <p className="mt-6 text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">Unplanned</p>
+            <h2 className="mt-3 font-serif text-2xl font-medium">Your day is ready when you are.</h2>
+            <p className="mt-3 max-w-md text-[15px] leading-relaxed text-[#657574]">
+              Add a few tasks, then let Planora arrange them around the time you actually have.
+            </p>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <PrimaryButton onClick={() => goTo('plan-input')}>Plan my day</PrimaryButton>
+              <SecondaryButton onClick={() => goTo('add-task')}>Add a task</SecondaryButton>
             </div>
-            <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">No plan for today yet</p>
-            <p className="mt-3 font-serif text-xl text-[#173B3D]">Your day is ready to be planned.</p>
-            <button
-              onClick={() => setScreen('plan-input')}
-              className="mt-8 inline-block border border-[#155E63] bg-[#155E63] px-8 py-3 text-sm tracking-[0.16em] uppercase text-[#FBF8EF] transition duration-200 hover:-translate-y-px hover:bg-[#103F43]"
-            >
-              Plan My Day
-            </button>
           </section>
         )}
 
-        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-          <section className="border border-[#155E63]/15 bg-white/70 p-6 md:p-7">
-            <h3 className="font-serif text-xl font-medium text-[#173B3D]">Pending Tasks</h3>
-            {tasks.filter(t => t.status === 'pending').length === 0 ? (
-              <p className="mt-5 text-sm text-[#657574]">No pending tasks</p>
+        <div className="grid grid-cols-1 gap-12 md:grid-cols-5">
+          <section className="md:col-span-3">
+            <h3 className="font-serif text-xl font-medium">Pending</h3>
+            {pending.length === 0 ? (
+              <p className="mt-5 text-sm leading-relaxed text-[#657574]">
+                No open tasks. When something needs time, add it here.
+              </p>
             ) : (
               <div className="mt-5 divide-y divide-[#155E63]/10">
-                {tasks.filter(t => t.status === 'pending').slice(0, 5).map(task => (
-                  <div key={task.id} className="flex items-center gap-3 py-3.5">
-                    <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#155E63]" />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-[#173B3D]">{task.title}</div>
-                      <div className="mt-0.5 text-xs tracking-wide text-[#8C8272]">{task.estimated_duration}m · {task.priority}</div>
-                    </div>
-                    <button onClick={() => deleteTask(task.id)} className="px-1 text-[#8C8272] transition duration-200 hover:text-[#103F43]">×</button>
-                  </div>
+                {pending.slice(0, 6).map((task) => (
+                  <TaskRow key={task.id} task={task} onDelete={() => deleteTask(task.id)} onComplete={() => completeTask(task.id)} />
                 ))}
               </div>
             )}
             <button
-              onClick={() => setScreen('add-task')}
-              className="mt-5 w-full border border-dashed border-[#6F9691] px-4 py-2.5 text-sm text-[#155E63] transition duration-200 hover:border-[#155E63] hover:bg-[#F8EDBF]/50"
+              onClick={() => goTo('add-task')}
+              className="mt-6 inline-flex min-h-11 items-center gap-2 text-sm tracking-[0.12em] uppercase text-[#155E63] transition duration-200 hover:text-[#103F43]"
             >
-              + Add Task
+              <Plus className="h-4 w-4" /> Add task
             </button>
           </section>
 
-          <section className="border border-[#155E63]/15 bg-white/70 p-6 md:p-7">
-            <h3 className="font-serif text-xl font-medium text-[#173B3D]">Quick Actions</h3>
-            <div className="mt-5">
-              <button
-                onClick={() => setScreen('progress')}
-                className="w-full border border-[#155E63]/15 bg-[#FBF8EF] px-4 py-3.5 text-left text-sm text-[#173B3D] transition duration-200 hover:-translate-y-px hover:border-[#D7C58A] hover:bg-[#F8EDBF]/70"
-              >
-                📊 View Progress
-              </button>
+          <section className="md:col-span-2">
+            <h3 className="font-serif text-xl font-medium">Move with intention</h3>
+            <div className="mt-5 space-y-2">
+              <QuietAction onClick={() => goTo('plan-input')} label="Plan my day" hint="Arrange remaining work" />
+              <QuietAction onClick={() => goTo('calendar')} label="Calendar" hint="Fixed commitments" />
+              <QuietAction onClick={() => goTo('progress')} label="Progress" hint="What you have already kept" />
             </div>
           </section>
         </div>
       </div>
+      <MobileDock screen={screen} goTo={goTo} />
     </div>
   );
 };
 
-const AddTaskScreen = ({ onSubmit, onBack, loading }) => (
-  <div className="min-h-screen bg-white p-6">
-    <div className="max-w-2xl mx-auto">
-      <BackButton onClick={onBack} />
-      <h1 className="text-2xl font-bold mb-8">Add a Task</h1>
+const AddTaskScreen = ({ onSubmit, loading, error }) => (
+  <div>
+    <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+      Capture what needs time. Priority, energy, and due date help Planora protect the rest of your day.
+    </p>
+    <ErrorBanner message={error} />
+    <div className="mt-8">
       <TaskForm onSubmit={onSubmit} loading={loading} />
     </div>
   </div>
 );
 
-const PlanInputScreen = ({ onSubmit, onBack, loading }) => (
-  <div className="min-h-screen bg-white p-6">
-    <div className="max-w-2xl mx-auto">
-      <BackButton onClick={onBack} />
-      <h1 className="text-2xl font-bold mb-8">Plan My Day</h1>
-      <PlanInputForm onSubmit={onSubmit} loading={loading} />
+const PlanInputScreen = ({ onSubmit, loading, error }) => (
+  <div>
+    <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+      Tell Planora the hours you actually have. It will not invent time you don’t.
+    </p>
+    <ErrorBanner message={error} />
+    <div className="mt-8">
+      <PlanInputForm onSubmit={onSubmit} loading={loading} submitLabel="Generate plan" />
     </div>
   </div>
 );
 
-const PlanViewScreen = ({ todayPlan, completeTask, setScreen }) => (
-  <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white p-6">
-    <div className="max-w-4xl mx-auto">
-      <BackButton onClick={() => setScreen('today')} />
-      {todayPlan && (
-        <div className="mt-8">
-          <h1 className="text-3xl font-bold mb-2">Your Plan</h1>
-          <p className="text-slate-600 mb-8">Tap "Mark Done" as you complete tasks</p>
-          <div className="space-y-3 mb-8">
-            {todayPlan.plan_blocks.map((block, index) => (
-              <Card key={`${block.start_time || block.start}-${block.task_id || block.type}-${index}`}>
-                <div className="flex items-center gap-4">
-                  <div className="text-3xl">{block.icon || '📌'}</div>
-                  <div className="flex-1">
-                    <div className="font-bold text-slate-900">{block.title}</div>
-                    <div className="text-sm text-slate-600">{block.start_time || block.start} → {block.end_time || block.end}</div>
-                  </div>
-                  {block.type === 'task' && (
-                    <button
-                      onClick={() => completeTask(block.task_id)}
-                      className={`px-4 py-2 rounded font-medium transition ${block.completed ? 'bg-green-100 text-green-700' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                    >
-                      {block.completed ? '✓ Done' : 'Mark Done'}
-                    </button>
-                  )}
-                </div>
-              </Card>
-            ))}
-          </div>
-          <Card className="mb-8">
-            <p className="text-slate-700 mb-4"><span className="font-semibold">Why this order?</span> {todayPlan.reasoning}</p>
-          </Card>
-          <div className="flex gap-4">
-            <button onClick={() => setScreen('replan')} className="flex-1 py-3 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium">
-              Replan
-            </button>
-            <button onClick={() => setScreen('today')} className="flex-1 py-3 bg-slate-200 text-slate-900 rounded-lg hover:bg-slate-300 transition font-medium">
-              Back
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  </div>
-);
-
-const ReplanScreen = ({ onSubmit, onBack, loading }) => (
-  <div className="min-h-screen bg-white p-6">
-    <div className="max-w-2xl mx-auto">
-      <BackButton onClick={onBack} />
-      <h1 className="text-2xl font-bold mb-8">Adjust Your Plan</h1>
-      <PlanInputForm onSubmit={onSubmit} loading={loading} />
-    </div>
-  </div>
-);
-
-const ProgressScreen = ({ tasks, onBack }) => {
-  const completedCount = tasks.filter(t => t.status === 'completed').length;
-  const totalCount = tasks.length;
-  const completionRate = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
+const PlanViewScreen = ({ todayPlan, completeTask, goTo }) => {
+  if (!todayPlan) {
+    return (
+      <div>
+        <p className="text-[15px] leading-relaxed text-[#657574]">There isn’t a plan for today yet.</p>
+        <PrimaryButton onClick={() => goTo('plan-input')} className="mt-6">Plan my day</PrimaryButton>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-white p-6">
-      <div className="max-w-2xl mx-auto">
-        <BackButton onClick={onBack} />
-        <h1 className="text-2xl font-bold mb-8">Your Progress</h1>
-        <div className="grid grid-cols-2 gap-4 mb-8">
-          <Card>
-            <div className="text-sm text-slate-600 mb-2">Tasks Completed</div>
-            <div className="text-3xl font-bold text-green-600">{completedCount}</div>
-            <div className="text-xs text-slate-600 mt-2">of {totalCount} total</div>
-          </Card>
-          <Card>
-            <div className="text-sm text-slate-600 mb-2">Completion Rate</div>
-            <div className="text-3xl font-bold text-blue-600">{completionRate}%</div>
-          </Card>
-        </div>
-        <Card>
-          <h3 className="font-semibold mb-4">By Category</h3>
-          <div className="space-y-3">
-            {['study', 'work', 'personal', 'health', 'errands'].map(cat => {
-              const count = tasks.filter(t => t.category === cat && t.status === 'completed').length;
-              return count > 0 && (
-                <div key={cat} className="flex justify-between items-center">
-                  <span className="text-slate-700 capitalize">{cat}</span>
-                  <span className="font-semibold text-slate-900">{count}</span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+    <div>
+      <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+        Mark each block as you finish. The order is already chosen so you don’t have to decide again.
+      </p>
+      <div className="mt-8">
+        <AgendaTimeline plan={todayPlan} completeTask={completeTask} />
+      </div>
+      {todayPlan.reasoning && (
+        <p className="mt-8 max-w-2xl border-t border-[#155E63]/10 pt-5 text-sm italic leading-relaxed text-[#657574]">
+          {todayPlan.reasoning}
+        </p>
+      )}
+      <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+        <PrimaryButton onClick={() => goTo('replan')}>Replan</PrimaryButton>
+        <SecondaryButton onClick={() => goTo('today')}>Back to today</SecondaryButton>
       </div>
     </div>
   );
 };
 
-// ============================================
-// SHARED COMPONENTS
-// ============================================
-
-const Card = ({ children, className = '' }) => (
-  <div className={`bg-white border border-slate-200 rounded-xl p-6 ${className}`}>
-    {children}
-  </div>
-);
-
-const BackButton = ({ onClick }) => (
-  <button onClick={onClick} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4 font-medium">
-    ← Back
-  </button>
-);
-
-const TopNav = ({ user, showMenu, setShowMenu, handleLogout, setScreen }) => (
-  <div className="relative border-b border-[#155E63]/15 bg-[#FBF8EF]/90">
-    <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-4 md:px-8">
-      <div className="font-serif text-lg tracking-[0.08em] text-[#155E63]">🌷 Planora</div>
-      <button onClick={() => setShowMenu(!showMenu)} className="p-2 text-[#155E63] transition duration-200 hover:bg-[#F8EDBF]/70">
-        <Menu className="h-5 w-5" />
-      </button>
-      {showMenu && (
-        <div className="absolute right-5 top-14 z-50 min-w-[10rem] border border-[#155E63]/15 bg-[#FBF8EF] shadow-sm md:right-8">
-          <button onClick={() => { setScreen('progress'); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-[#173B3D] transition duration-200 hover:bg-[#F8EDBF]/80">
-            📊 Progress
-          </button>
-          <button onClick={() => { handleLogout(); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-[#8C8272] transition duration-200 hover:bg-[#F8EDBF]/80 hover:text-[#103F43]">
-            Logout
-          </button>
-        </div>
-      )}
+const ReplanScreen = ({ onSubmit, loading, error }) => (
+  <div>
+    <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+      Time shifted. Energy changed. Rebuild the rest of the day from what’s still open.
+    </p>
+    <ErrorBanner message={error} />
+    <div className="mt-8">
+      <PlanInputForm onSubmit={onSubmit} loading={loading} submitLabel="Rebuild plan" />
     </div>
   </div>
 );
+
+const ProgressScreen = ({ tasks }) => {
+  const completed = tasks.filter((t) => t.status === 'completed');
+  const totalCount = tasks.length;
+  const completionRate = totalCount === 0 ? 0 : Math.round((completed.length / totalCount) * 100);
+  const categories = ['study', 'work', 'personal', 'health', 'errands'];
+
+  return (
+    <div>
+      <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+        A quiet record of what you finished — not a scoreboard.
+      </p>
+      <div className="mt-10 grid grid-cols-2 gap-8">
+        <div>
+          <p className="planora-label">Completed</p>
+          <p className="font-serif text-4xl text-[#155E63]">{completed.length}</p>
+          <p className="mt-2 text-sm text-[#8C8272]">of {totalCount} tasks</p>
+        </div>
+        <div>
+          <p className="planora-label">Kept</p>
+          <p className="font-serif text-4xl text-[#173B3D]">{completionRate}%</p>
+          <div className="mt-4 h-px w-full bg-[#155E63]/15">
+            <div className="h-px bg-[#155E63] transition-all duration-300" style={{ width: `${completionRate}%` }} />
+          </div>
+        </div>
+      </div>
+      <div className="mt-12">
+        <h3 className="font-serif text-xl font-medium">By category</h3>
+        <div className="mt-5 divide-y divide-[#155E63]/10">
+          {categories.map((cat) => {
+            const count = completed.filter((t) => t.category === cat).length;
+            if (!count) return null;
+            return (
+              <div key={cat} className="flex items-center justify-between py-3.5">
+                <span className="capitalize text-[#173B3D]">{cat}</span>
+                <span className="font-serif text-lg text-[#155E63]">{count}</span>
+              </div>
+            );
+          })}
+          {completed.length === 0 && (
+            <p className="py-4 text-sm text-[#657574]">Nothing completed yet. The day is still ahead.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CalendarScreen = ({ events, onSubmit, onDelete, loading, error }) => {
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState('class');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit({
+      title,
+      type,
+      start_datetime: start,
+      end_datetime: end
+    });
+    setTitle('');
+    setStart('');
+    setEnd('');
+  };
+
+  const sorted = [...(events || [])].sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime));
+
+  return (
+    <div>
+      <p className="max-w-lg text-[15px] leading-relaxed text-[#657574]">
+        Fixed commitments stay visible so planning never pretends those hours are free.
+      </p>
+      <ErrorBanner message={error} />
+
+      <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+        <div>
+          <label className="planora-label">Commitment</label>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Lecture, lab, appointment" className="planora-input" required disabled={loading} />
+        </div>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+          <div>
+            <label className="planora-label">Type</label>
+            <select value={type} onChange={(e) => setType(e.target.value)} className="planora-input" disabled={loading}>
+              <option value="class">Class</option>
+              <option value="exam">Exam</option>
+              <option value="work">Work</option>
+              <option value="personal">Personal</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="planora-label">Starts</label>
+            <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} className="planora-input" required disabled={loading} />
+          </div>
+          <div>
+            <label className="planora-label">Ends</label>
+            <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className="planora-input" required disabled={loading} />
+          </div>
+        </div>
+        <PrimaryButton type="submit" disabled={loading}>{loading ? 'Saving…' : 'Add to calendar'}</PrimaryButton>
+      </form>
+
+      <div className="mt-12">
+        <h3 className="font-serif text-xl font-medium">Upcoming</h3>
+        {sorted.length === 0 ? (
+          <p className="mt-5 text-sm leading-relaxed text-[#657574]">No commitments recorded. Your calendar is clear.</p>
+        ) : (
+          <div className="mt-5 divide-y divide-[#155E63]/10">
+            {sorted.map((event) => (
+              <div key={event.id} className="flex items-start gap-4 py-4">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-[#173B3D]">{event.title}</div>
+                  <div className="mt-1 text-sm text-[#657574]">
+                    {formatDateTime(event.start_datetime)} → {formatDateTime(event.end_datetime)}
+                  </div>
+                  <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-[#8C8272]">{event.type}</div>
+                </div>
+                <button
+                  onClick={() => onDelete(event.id)}
+                  className="min-h-11 px-2 text-sm text-[#8C8272] transition duration-200 hover:text-[#103F43]"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const AgendaTimeline = ({ plan, tasks = [], completeTask }) => {
+  const blocks = plan?.plan_blocks || [];
+  const taskById = Object.fromEntries(tasks.map((task) => [String(task.id), task]));
+
+  return (
+    <div>
+      {blocks.map((block, index) => {
+        const isTask = block.type === 'task';
+        const isBreak = block.type === 'break';
+        const linked = block.task_id ? taskById[String(block.task_id)] : null;
+        const highlight = isTask && ((linked && linked.priority === 'high') || block.priority === 'high' || index === 0);
+        const start = block.start_time || block.start;
+        const end = block.end_time || block.end;
+        return (
+          <div
+            key={`${start}-${block.task_id || block.type}-${index}`}
+            className={`group relative flex gap-5 py-5 transition-opacity duration-200 md:gap-8 ${
+              index !== blocks.length - 1 ? 'border-b border-[#155E63]/10' : ''
+            } ${block.completed ? 'opacity-55' : ''}`}
+          >
+            <div className="w-16 shrink-0 pt-0.5 text-right md:w-20">
+              <div className="font-serif text-sm text-[#155E63]">{start}</div>
+              <div className="mt-1 text-[11px] tracking-wide text-[#8C8272]">
+                {block.duration_minutes ? `${block.duration_minutes}m` : ''}
+              </div>
+            </div>
+            <div className="relative w-px shrink-0 bg-[#155E63]/20">
+              <span
+                className={`absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border ${
+                  highlight
+                    ? 'border-[#D7C58A] bg-[#F3E6A5]'
+                    : isBreak
+                      ? 'border-[#6F9691] bg-[#FBF8EF]'
+                      : 'border-[#155E63] bg-[#155E63]'
+                }`}
+              />
+            </div>
+            <div className={`min-w-0 flex-1 px-1 py-1 transition duration-200 md:px-4 ${highlight && !block.completed ? 'bg-[#F8EDBF]/50' : ''}`}>
+              <div className="flex items-start gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className={`text-[15px] text-[#173B3D] ${block.completed ? 'line-through decoration-[#6F9691]/70' : ''}`}>
+                    {block.title}
+                  </div>
+                  <div className="mt-1 text-sm text-[#657574]">{start} → {end}</div>
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-[#8C8272]">
+                    {isBreak && <span>Break</span>}
+                    {block.type === 'buffer' && <span>Buffer</span>}
+                    {linked?.priority && <span>{linked.priority} priority</span>}
+                    {linked?.category && <span>{linked.category}</span>}
+                    {linked?.energy_required && <span>{linked.energy_required} energy</span>}
+                  </div>
+                </div>
+                {isTask && (
+                  <button
+                    onClick={() => completeTask(block.task_id)}
+                    className={`min-h-11 shrink-0 border px-3.5 text-xs tracking-[0.12em] uppercase transition duration-200 ${
+                      block.completed
+                        ? 'border-[#6F9691]/40 bg-transparent text-[#6F9691]'
+                        : 'border-[#155E63] bg-[#155E63] text-[#FBF8EF] hover:-translate-y-px hover:bg-[#103F43] active:translate-y-px'
+                    }`}
+                  >
+                    {block.completed ? 'Done' : 'Mark done'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const TaskRow = ({ task, onDelete, onComplete }) => {
+  const due = dueMeta(task.due_date);
+  return (
+    <div className="flex items-start gap-3 py-4">
+      <button
+        onClick={onComplete}
+        aria-label={`Complete ${task.title}`}
+        className="mt-1 h-4 w-4 shrink-0 rounded-full border border-[#155E63] transition duration-200 hover:bg-[#F3E6A5]"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-[#173B3D]">{task.title}</div>
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-[#8C8272]">
+          <span>{task.estimated_duration}m</span>
+          <span>{task.priority}</span>
+          {task.energy_required && <span>{task.energy_required} energy</span>}
+          {task.category && <span>{task.category}</span>}
+          {due && (
+            <span className={due.kind === 'overdue' ? 'text-[#155E63]' : ''}>{due.label}</span>
+          )}
+        </div>
+      </div>
+      <button onClick={onDelete} className="min-h-11 px-1 text-[#8C8272] transition duration-200 hover:text-[#103F43]" aria-label={`Delete ${task.title}`}>
+        ×
+      </button>
+    </div>
+  );
+};
 
 const TaskForm = ({ onSubmit, loading }) => {
   const [title, setTitle] = useState('');
@@ -885,40 +1102,32 @@ const TaskForm = ({ onSubmit, loading }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Task</label>
-        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g., Biology Chapter 4" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900" disabled={loading} required />
+        <label className="planora-label">Task</label>
+        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g., Biology Chapter 4" className="planora-input" disabled={loading} required />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Duration (min)</label>
-          <input type="number" value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading} />
+          <label className="planora-label">Duration (min)</label>
+          <input type="number" value={duration} onChange={(e) => setDuration(e.target.value)} className="planora-input" disabled={loading} />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Due date</label>
-          <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading} />
+          <label className="planora-label">Due date</label>
+          <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="planora-input" disabled={loading} />
         </div>
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Priority</label>
-        <select value={priority} onChange={(e) => setPriority(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading}>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+        <p className="planora-label">Priority</p>
+        <ChoiceRow value={priority} onChange={setPriority} options={['low', 'medium', 'high']} disabled={loading} />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Energy required</label>
-        <select value={energy} onChange={(e) => setEnergy(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading}>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+        <p className="planora-label">Energy required</p>
+        <ChoiceRow value={energy} onChange={setEnergy} options={['low', 'medium', 'high']} disabled={loading} />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-2">Category</label>
-        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading}>
+        <label className="planora-label">Category</label>
+        <select value={category} onChange={(e) => setCategory(e.target.value)} className="planora-input" disabled={loading}>
           <option value="study">Study</option>
           <option value="work">Work</option>
           <option value="personal">Personal</option>
@@ -926,14 +1135,14 @@ const TaskForm = ({ onSubmit, loading }) => {
           <option value="errands">Errands</option>
         </select>
       </div>
-      <button type="submit" disabled={loading} className="w-full py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium disabled:opacity-50">
-        {loading ? 'Adding...' : 'Add Task'}
-      </button>
+      <PrimaryButton type="submit" disabled={loading} className="w-full sm:w-auto">
+        {loading ? 'Adding…' : 'Add task'}
+      </PrimaryButton>
     </form>
   );
 };
 
-const PlanInputForm = ({ onSubmit, loading }) => {
+const PlanInputForm = ({ onSubmit, loading, submitLabel = 'Generate plan' }) => {
   const [availableFrom, setAvailableFrom] = useState('18:00');
   const [availableUntil, setAvailableUntil] = useState('22:00');
   const [energy, setEnergy] = useState('medium');
@@ -944,41 +1153,178 @@ const PlanInputForm = ({ onSubmit, loading }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <Card>
-        <h3 className="font-semibold mb-4">When are you available?</h3>
-        <div className="grid grid-cols-2 gap-4">
+    <form onSubmit={handleSubmit} className="space-y-8">
+      <div>
+        <h3 className="font-serif text-xl font-medium">When are you available?</h3>
+        <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">From</label>
-            <input type="time" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading} />
+            <label className="planora-label">From</label>
+            <input type="time" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} className="planora-input" disabled={loading} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Until</label>
-            <input type="time" value={availableUntil} onChange={(e) => setAvailableUntil(e.target.value)} className="w-full px-4 py-2 border border-slate-300 rounded-lg" disabled={loading} />
+            <label className="planora-label">Until</label>
+            <input type="time" value={availableUntil} onChange={(e) => setAvailableUntil(e.target.value)} className="planora-input" disabled={loading} />
           </div>
         </div>
-      </Card>
-
-      <Card>
-        <h3 className="font-semibold mb-4">How's your energy today?</h3>
-        <div className="flex gap-3">
-          {['low', 'medium', 'high'].map(e => (
-            <button
-              key={e}
-              type="button"
-              onClick={() => setEnergy(e)}
-              disabled={loading}
-              className={`flex-1 px-4 py-3 rounded-lg font-medium transition ${energy === e ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} disabled:opacity-50`}
-            >
-              {e === 'low' ? '🔴' : e === 'medium' ? '🟡' : '🟢'} {e.charAt(0).toUpperCase() + e.slice(1)}
-            </button>
-          ))}
+      </div>
+      <div>
+        <h3 className="font-serif text-xl font-medium">How is your energy?</h3>
+        <div className="mt-5">
+          <ChoiceRow value={energy} onChange={setEnergy} options={['low', 'medium', 'high']} disabled={loading} />
         </div>
-      </Card>
-
-      <button type="submit" disabled={loading} className="w-full py-3 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium text-lg disabled:opacity-50">
-        {loading ? 'Generating...' : 'Generate Plan'}
-      </button>
+      </div>
+      <PrimaryButton type="submit" disabled={loading} className="w-full sm:w-auto">
+        {loading ? 'Arranging…' : submitLabel}
+      </PrimaryButton>
     </form>
   );
 };
+
+const TopNav = ({ showMenu, setShowMenu, handleLogout, goTo }) => (
+  <div className="sticky top-0 z-40 border-b border-[#155E63]/10 bg-[#FBF8EF]/92 backdrop-blur-sm">
+    <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-3.5 md:px-8">
+      <button onClick={() => goTo('today')} className="font-serif text-[17px] tracking-[0.14em] text-[#155E63] transition duration-200 hover:text-[#103F43]">
+        Planora
+      </button>
+      <div className="hidden items-center gap-7 text-[12px] uppercase tracking-[0.16em] text-[#6F9691] md:flex">
+        <NavText onClick={() => goTo('today')} label="Today" />
+        <NavText onClick={() => goTo('add-task')} label="Task" />
+        <NavText onClick={() => goTo('plan-input')} label="Plan" />
+        <NavText onClick={() => goTo('calendar')} label="Calendar" />
+        <NavText onClick={() => goTo('progress')} label="Progress" />
+      </div>
+      <button
+        onClick={() => setShowMenu(!showMenu)}
+        className="p-2.5 text-[#155E63] transition duration-200 hover:bg-[#F8EDBF]/70 md:hidden"
+        aria-label="Menu"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+      <button
+        onClick={handleLogout}
+        className="hidden p-2.5 text-[#6F9691] transition duration-200 hover:text-[#103F43] md:inline-flex"
+        aria-label="Log out"
+      >
+        <LogOut className="h-4 w-4" />
+      </button>
+      {showMenu && (
+        <div className="absolute right-5 top-14 z-50 min-w-[12rem] border border-[#155E63]/15 bg-[#FBF8EF] shadow-quiet md:right-8">
+          <button onClick={() => goTo('progress')} className="w-full px-4 py-3 text-left text-sm text-[#173B3D] transition duration-200 hover:bg-[#F8EDBF]/80">Progress</button>
+          <button onClick={() => goTo('calendar')} className="w-full px-4 py-3 text-left text-sm text-[#173B3D] transition duration-200 hover:bg-[#F8EDBF]/80">Calendar</button>
+          <button onClick={() => { handleLogout(); setShowMenu(false); }} className="w-full px-4 py-3 text-left text-sm text-[#8C8272] transition duration-200 hover:bg-[#F8EDBF]/80 hover:text-[#103F43]">Log out</button>
+        </div>
+      )}
+    </div>
+  </div>
+);
+
+const MobileDock = ({ screen, goTo }) => (
+  <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[#155E63]/10 bg-[#FBF8EF]/95 backdrop-blur-sm md:hidden">
+    <div className="mx-auto grid max-w-4xl grid-cols-4 px-2 py-1.5">
+      <DockItem active={screen === 'today'} label="Today" onClick={() => goTo('today')} icon={<span className="h-1.5 w-1.5 rounded-full bg-current" />} />
+      <DockItem active={screen === 'add-task'} label="Task" onClick={() => goTo('add-task')} icon={<Plus className="h-4 w-4" />} />
+      <DockItem active={['plan-input', 'plan-view', 'replan'].includes(screen)} label="Plan" onClick={() => goTo('plan-input')} icon={<Clock className="h-4 w-4" />} />
+      <DockItem active={screen === 'progress'} label="More" onClick={() => goTo('progress')} icon={<TrendingUp className="h-4 w-4" />} />
+    </div>
+  </nav>
+);
+
+const DockItem = ({ active, label, onClick, icon }) => (
+  <button
+    onClick={onClick}
+    className={`flex min-h-12 flex-col items-center justify-center gap-1 text-[10px] uppercase tracking-[0.16em] transition duration-200 ${
+      active ? 'text-[#155E63]' : 'text-[#8C8272]'
+    }`}
+  >
+    {icon}
+    {label}
+  </button>
+);
+
+const NavText = ({ onClick, label }) => (
+  <button onClick={onClick} className="transition duration-200 hover:text-[#155E63]">
+    {label}
+  </button>
+);
+
+const PrimaryButton = ({ children, className = '', ...props }) => (
+  <button
+    {...props}
+    className={`inline-flex min-h-12 items-center justify-center border border-[#155E63] bg-[#155E63] px-7 text-sm tracking-[0.16em] uppercase text-[#FBF8EF] transition duration-200 hover:-translate-y-px hover:bg-[#103F43] active:translate-y-px disabled:translate-y-0 disabled:opacity-50 ${className}`}
+  >
+    {children}
+  </button>
+);
+
+const SecondaryButton = ({ children, className = '', ...props }) => (
+  <button
+    {...props}
+    className={`inline-flex min-h-12 items-center justify-center border border-[#155E63]/35 bg-transparent px-7 text-sm tracking-[0.16em] uppercase text-[#155E63] transition duration-200 hover:-translate-y-px hover:border-[#155E63] hover:bg-[#F8EDBF]/50 active:translate-y-px ${className}`}
+  >
+    {children}
+  </button>
+);
+
+const ChoiceRow = ({ value, onChange, options, disabled }) => (
+  <div className="flex flex-wrap gap-2">
+    {options.map((option) => (
+      <button
+        key={option}
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(option)}
+        className={`min-h-11 min-w-[5.5rem] border px-4 text-xs uppercase tracking-[0.16em] transition duration-200 ${
+          value === option
+            ? 'border-[#155E63] bg-[#155E63] text-[#FBF8EF]'
+            : 'border-[#155E63]/20 bg-white/50 text-[#173B3D] hover:border-[#D7C58A] hover:bg-[#F8EDBF]/70'
+        } disabled:opacity-50`}
+      >
+        {option}
+      </button>
+    ))}
+  </div>
+);
+
+const ErrorBanner = ({ message }) => {
+  if (!message) return null;
+  return (
+    <div className="mt-6 border border-[#D7C58A] bg-[#F8EDBF]/70 px-4 py-3 text-sm leading-relaxed text-[#103F43]">
+      {friendlyError(message)}
+    </div>
+  );
+};
+
+const BackLink = ({ onClick }) => (
+  <button onClick={onClick} className="text-[12px] uppercase tracking-[0.18em] text-[#6F9691] transition duration-200 hover:text-[#155E63]">
+    ← Today
+  </button>
+);
+
+const Stat = ({ label, value, accent, last }) => (
+  <div className={`border-[#155E63]/10 px-5 py-5 ${last ? '' : 'border-b md:border-b-0 md:border-r'}`}>
+    <div className="text-[11px] uppercase tracking-[0.18em] text-[#8C8272]">{label}</div>
+    <div className={`mt-3 font-serif text-3xl ${accent ? 'text-[#155E63]' : 'text-[#173B3D]'}`}>{value}</div>
+  </div>
+);
+
+const QuietAction = ({ onClick, label, hint }) => (
+  <button
+    onClick={onClick}
+    className="w-full border-b border-[#155E63]/10 py-4 text-left transition duration-200 hover:translate-x-0.5 hover:border-[#D7C58A]"
+  >
+    <div className="text-sm text-[#173B3D]">{label}</div>
+    <div className="mt-1 text-xs tracking-wide text-[#8C8272]">{hint}</div>
+  </button>
+);
+
+const TodaySkeleton = () => (
+  <div className="mb-14 animate-pulse space-y-6">
+    <div className="h-3 w-24 bg-[#155E63]/10" />
+    <div className="h-8 w-48 bg-[#155E63]/10" />
+    <div className="space-y-3 pt-4">
+      <div className="h-16 bg-[#155E63]/8" />
+      <div className="h-16 bg-[#155E63]/8" />
+      <div className="h-16 bg-[#155E63]/8" />
+    </div>
+  </div>
+);
