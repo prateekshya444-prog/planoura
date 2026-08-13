@@ -2,7 +2,7 @@
  * PLANORA MVP - Backend Server
  * Express.js + PostgreSQL
  * 
- * Run: npm install express cors dotenv pg jsonwebtoken bcrypt anthropic
+ * Run: npm install express cors dotenv pg jsonwebtoken bcrypt
  * Then: node planora_backend_server.js
  */
 
@@ -12,7 +12,6 @@ const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
-const Anthropic = require('@anthropic-ai/sdk');
 const crypto = require('crypto');
 
 dotenv.config();
@@ -33,10 +32,9 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/planora'
 });
 
-// Claude API
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_FREE_MODEL = 'openrouter/free';
+const OPENROUTER_TIMEOUT_MS = 15000;
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-production';
@@ -459,8 +457,39 @@ app.delete('/api/calendar/events/:id', authMiddleware, async (req, res) => {
 // AI SCHEDULING (Core Feature)
 // ============================================
 
-const generateScheduleWithClaude = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
-  const prompt = `You are an intelligent scheduling assistant for Planora, a student planner app.
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+const SCHEDULE_TYPES = new Set(['task', 'break', 'buffer']);
+
+const padTime = (hours, minutes) =>
+  `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
+const parseMinutes = (value) => {
+  if (!value || !TIME_RE.test(String(value).trim())) return null;
+  const [hours, minutes] = String(value).trim().split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+const minutesToTime = (total) => padTime(Math.floor(total / 60), total % 60);
+
+const toDateKey = (value) => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const text = String(value);
+    return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : null;
+  }
+  return date.toISOString().slice(0, 10);
+};
+
+const sanitizeErrorMessage = (err) => {
+  const raw = String((err && err.message) || err || 'unknown error');
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) return raw;
+  return raw.split(key).join('[redacted]');
+};
+
+const buildSchedulePrompt = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) =>
+  `You are an intelligent scheduling assistant for Planora, a student planner app.
 
 AVAILABLE TIME:
 From: ${availableFrom}
@@ -468,7 +497,7 @@ Until: ${availableUntil}
 Energy Level: ${energyLevel}
 
 TASKS TO SCHEDULE:
-${tasksToSchedule.map(t => `- "${t.title}" (${t.estimated_duration} min, priority: ${t.priority}, energy: ${t.energy_required}, due: ${t.due_date || 'no deadline'})`).join('\n')}
+${tasksToSchedule.map(t => `- id:${t.id} "${t.title}" (${t.estimated_duration} min, priority: ${t.priority}, energy: ${t.energy_required}, due: ${t.due_date || 'no deadline'}, category: ${t.category || 'other'})`).join('\n')}
 
 USER PREFERENCES:
 - Max focus session: ${userPreferences.max_focus_session} minutes
@@ -496,23 +525,224 @@ RETURN ONLY VALID JSON (no markdown, no explanation):
   "reasoning": "1-2 sentences explaining prioritization"
 }`;
 
+const normalizeSchedule = (parsed, tasksToSchedule) => {
+  if (!parsed || !Array.isArray(parsed.schedule)) return null;
+
+  const knownTaskIds = new Set(tasksToSchedule.map((task) => String(task.id)));
+  const blocks = [];
+
+  for (const item of parsed.schedule) {
+    if (!item || typeof item !== 'object') continue;
+    const start = item.start || item.start_time;
+    const end = item.end || item.end_time;
+    const startMinutes = parseMinutes(start);
+    const endMinutes = parseMinutes(end);
+    const type = String(item.type || '').toLowerCase();
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) continue;
+    if (!SCHEDULE_TYPES.has(type)) continue;
+    if (!item.title) continue;
+
+    let taskId = item.task_id == null || item.task_id === 'null' ? null : String(item.task_id);
+    if (type !== 'task') taskId = null;
+    if (taskId && !knownTaskIds.has(taskId)) taskId = null;
+
+    blocks.push({
+      start: minutesToTime(startMinutes),
+      end: minutesToTime(endMinutes),
+      start_time: minutesToTime(startMinutes),
+      end_time: minutesToTime(endMinutes),
+      duration_minutes: endMinutes - startMinutes,
+      title: String(item.title),
+      task_id: taskId,
+      category: item.category || (type === 'task' ? 'other' : type),
+      type
+    });
+  }
+
+  if (blocks.length === 0) return null;
+
+  const reasoning = typeof parsed.reasoning === 'string' && parsed.reasoning.trim()
+    ? parsed.reasoning.trim()
+    : 'Schedule generated from your tasks, deadlines, energy, and available time.';
+
+  return { schedule: blocks, reasoning };
+};
+
+const generateDeterministicSchedule = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+  const startMinutes = parseMinutes(availableFrom);
+  const endMinutes = parseMinutes(availableUntil);
+  const maxFocus = Number(userPreferences.max_focus_session) > 0 ? Number(userPreferences.max_focus_session) : 90;
+  const breakMinutes = Number(userPreferences.preferred_break_duration) > 0 ? Number(userPreferences.preferred_break_duration) : 15;
+  const today = new Date().toISOString().slice(0, 10);
+  const priorityMap = { high: 1, medium: 2, low: 3 };
+
+  const energyMatch = (taskEnergy, userEnergy) => {
+    if (taskEnergy === userEnergy) return 0;
+    if (userEnergy === 'high') return 1;
+    if (userEnergy === 'medium' && taskEnergy === 'low') return 0.5;
+    return 2;
+  };
+
+  const sortedTasks = [...tasksToSchedule].sort((a, b) => {
+    const aDue = toDateKey(a.due_date);
+    const bDue = toDateKey(b.due_date);
+    const aOverdue = Boolean(aDue && aDue < today);
+    const bOverdue = Boolean(bDue && bDue < today);
+    if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+    if (aDue && bDue && aDue !== bDue) return aDue < bDue ? -1 : 1;
+    if (aDue && !bDue) return -1;
+    if (!aDue && bDue) return 1;
+    const aPriority = priorityMap[a.priority] || 2;
+    const bPriority = priorityMap[b.priority] || 2;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    const energyDiff = energyMatch(a.energy_required, energyLevel) - energyMatch(b.energy_required, energyLevel);
+    if (energyDiff !== 0) return energyDiff;
+    return Number(b.estimated_duration || 0) - Number(a.estimated_duration || 0);
+  });
+
+  const schedule = [];
+  let currentMinutes = startMinutes;
+  let focusUsed = 0;
+
+  if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+    return {
+      schedule: [],
+      reasoning: 'Available time window is invalid, so no blocks were scheduled.'
+    };
+  }
+
+  for (const task of sortedTasks) {
+    const duration = Number(task.estimated_duration);
+    if (!Number.isFinite(duration) || duration <= 0) continue;
+
+    if (focusUsed > 0 && focusUsed + duration > maxFocus && currentMinutes + breakMinutes + duration <= endMinutes) {
+      const breakEnd = currentMinutes + breakMinutes;
+      schedule.push({
+        start: minutesToTime(currentMinutes),
+        end: minutesToTime(breakEnd),
+        start_time: minutesToTime(currentMinutes),
+        end_time: minutesToTime(breakEnd),
+        duration_minutes: breakMinutes,
+        title: 'Break',
+        task_id: null,
+        category: 'break',
+        type: 'break'
+      });
+      currentMinutes = breakEnd;
+      focusUsed = 0;
+    }
+
+    if (currentMinutes + duration > endMinutes) continue;
+
+    const taskEnd = currentMinutes + duration;
+    schedule.push({
+      start: minutesToTime(currentMinutes),
+      end: minutesToTime(taskEnd),
+      start_time: minutesToTime(currentMinutes),
+      end_time: minutesToTime(taskEnd),
+      duration_minutes: duration,
+      title: task.title,
+      task_id: task.id,
+      category: task.category || 'other',
+      type: 'task'
+    });
+    currentMinutes = taskEnd;
+    focusUsed += duration;
+  }
+
+  if (currentMinutes < endMinutes) {
+    schedule.push({
+      start: minutesToTime(currentMinutes),
+      end: minutesToTime(endMinutes),
+      start_time: minutesToTime(currentMinutes),
+      end_time: minutesToTime(endMinutes),
+      duration_minutes: endMinutes - currentMinutes,
+      title: 'Buffer / Review',
+      task_id: null,
+      category: 'buffer',
+      type: 'buffer'
+    });
+  }
+
+  return {
+    schedule,
+    reasoning: 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Included breaks to protect focus within the available time.'
+  };
+};
+
+const generateScheduleWithOpenRouter = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-1-20250805',
-      max_tokens: 1000,
-      messages: [{ role: 'user', content: prompt }]
+    const response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_FREE_MODEL,
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: buildSchedulePrompt(tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences)
+        }]
+      }),
+      signal: controller.signal
     });
 
-    const content = message.content[0].type === 'text' ? message.content[0].text : '';
-    
-    // Parse JSON from response (handle potential markdown)
-    let jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
+    if (!response.ok) {
+      throw new Error(`OpenRouter request failed (${response.status})`);
+    }
 
-    return parsed;
+    const data = await response.json();
+    const content = data && data.choices && data.choices[0] && data.choices[0].message
+      ? data.choices[0].message.content
+      : '';
+    const jsonStr = String(content || '').replace(/```json\n?|\n?```/g, '').trim();
+    return JSON.parse(jsonStr);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+  const fallback = generateDeterministicSchedule(
+    tasksToSchedule,
+    availableFrom,
+    availableUntil,
+    energyLevel,
+    userPreferences
+  );
+
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.error('OpenRouter API key is not set; using deterministic scheduler');
+    return fallback;
+  }
+
+  try {
+    const parsed = await generateScheduleWithOpenRouter(
+      tasksToSchedule,
+      availableFrom,
+      availableUntil,
+      energyLevel,
+      userPreferences
+    );
+    const normalized = normalizeSchedule(parsed, tasksToSchedule);
+    if (!normalized) {
+      console.error('OpenRouter returned unusable schedule data; using deterministic scheduler');
+      return fallback;
+    }
+    return normalized;
   } catch (err) {
-    console.error('Claude API error:', err.message);
-    throw new Error('Failed to generate schedule');
+    if (err && err.name === 'AbortError') {
+      console.error('OpenRouter request timed out; using deterministic scheduler');
+    } else {
+      console.error('OpenRouter schedule generation failed; using deterministic scheduler:', sanitizeErrorMessage(err));
+    }
+    return fallback;
   }
 };
 
@@ -544,8 +774,8 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
       });
     }
 
-    // Generate schedule using Claude
-    const schedule = await generateScheduleWithClaude(tasks, available_from, available_until, energy_today, {
+    // Generate schedule using OpenRouter, with deterministic fallback
+    const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
       max_focus_session: user.max_focus_session,
       preferred_break_duration: user.preferred_break_duration
     });
@@ -602,7 +832,7 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
     }
 
     // Generate new schedule
-    const schedule = await generateScheduleWithClaude(tasks, available_from, available_until, energy_today, {
+    const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
       max_focus_session: user.max_focus_session,
       preferred_break_duration: user.preferred_break_duration
     });
