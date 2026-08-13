@@ -313,7 +313,7 @@ OUTPUT:
 }
 ```
 
-### Claude API Integration (for MVP)
+### OpenRouter Integration (for MVP)
 
 ```javascript
 // Pseudocode for any backend framework
@@ -351,8 +351,8 @@ function generatePlan(input) {
     }
   `;
 
-  const response = await claudeAPI.call({
-    model: "claude-opus",
+  const response = await openRouterAPI.call({
+    model: "openrouter/free",
     max_tokens: 1000,
     messages: [{ role: "user", content: prompt }]
   });
@@ -481,10 +481,10 @@ CREATE INDEX idx_plans_user_date ON daily_plans(user_id, date);
 
 ### Phase 5: AI Plan Generation
 - [ ] Fetch user's tasks, calendar, availability
-- [ ] Call Claude API with formatted prompt
+- [ ] Call OpenRouter with formatted prompt (`openrouter/free`)
 - [ ] Parse response into plan blocks
 - [ ] Save plan to daily_plans table
-- [ ] Handle Claude API errors gracefully
+- [ ] Fall back to the deterministic scheduler if OpenRouter fails
 
 ### Phase 6: Replan
 - [ ] Accept unfinished tasks + new availability
@@ -564,7 +564,7 @@ CREATE INDEX idx_plans_user_date ON daily_plans(user_id, date);
 ✅ Users can sign up and log in
 ✅ Users can create and manage tasks
 ✅ Users can see today's plan
-✅ AI generates a realistic schedule (using Claude)
+✅ AI generates a realistic schedule (OpenRouter, with deterministic fallback)
 ✅ Users can replan when life changes
 ✅ No data leaks or auth issues
 ✅ Fast enough to use daily (< 2s response time)

@@ -528,91 +528,172 @@ const TodayScreen = ({ user, tasks, todayPlan, setScreen, completeTask, deleteTa
   const totalCount = tasks.length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white">
+    <div className="min-h-screen bg-[#FBF8EF] text-[#173B3D]">
       <TopNav user={user} showMenu={showMenu} setShowMenu={setShowMenu} handleLogout={handleLogout} setScreen={setScreen} />
-      <div className="max-w-4xl mx-auto p-4 md:p-6">
-        {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">{error}</div>}
+      <div className="max-w-4xl mx-auto px-5 md:px-8 pb-16">
+        {error && (
+          <div className="mt-6 border border-[#D7C58A] bg-[#F8EDBF]/70 px-4 py-3 text-sm text-[#103F43]">
+            {error}
+          </div>
+        )}
 
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-slate-900">Good morning, {user?.name} 🌷</h1>
-          <p className="text-slate-600 mt-2">Let's make today count</p>
+        <div className="pt-12 pb-10 md:pt-16 md:pb-14">
+          <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">Today</p>
+          <h1 className="mt-4 font-serif text-[2rem] md:text-[2.35rem] font-medium leading-tight text-[#173B3D]">
+            Good morning, {user?.name} 🌷
+          </h1>
+          <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-[#657574]">Let's make today count</p>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <Card><div className="text-sm text-slate-600 mb-1">Tasks Completed</div><div className="text-3xl font-bold text-slate-900">{completedCount}</div></Card>
-          <Card><div className="text-sm text-slate-600 mb-1">Tasks Remaining</div><div className="text-3xl font-bold text-slate-900">{totalCount - completedCount}</div></Card>
-          <Card><div className="text-sm text-slate-600 mb-1">Total Tasks</div><div className="text-3xl font-bold text-slate-900">{totalCount}</div></Card>
-          <Card><div className="text-sm text-slate-600 mb-1">Planned Today</div><div className="text-3xl font-bold text-slate-900">{todayPlan ? '✓' : '—'}</div></Card>
+        <div className="mb-12 grid grid-cols-2 border border-[#155E63]/15 bg-white/60 md:grid-cols-4">
+          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
+            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Tasks Completed</div>
+            <div className="mt-3 font-serif text-3xl text-[#155E63]">{completedCount}</div>
+          </div>
+          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
+            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Tasks Remaining</div>
+            <div className="mt-3 font-serif text-3xl text-[#173B3D]">{totalCount - completedCount}</div>
+          </div>
+          <div className="border-b border-[#155E63]/10 px-5 py-5 md:border-b-0 md:border-r">
+            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Total Tasks</div>
+            <div className="mt-3 font-serif text-3xl text-[#173B3D]">{totalCount}</div>
+          </div>
+          <div className="px-5 py-5">
+            <div className="text-[11px] tracking-[0.18em] uppercase text-[#8C8272]">Planned Today</div>
+            <div className="mt-3 font-serif text-3xl text-[#155E63]">{todayPlan ? '✓' : '—'}</div>
+          </div>
         </div>
 
         {todayPlan ? (
-          <Card className="mb-8">
-            <h2 className="text-xl font-bold mb-4">Today's Plan</h2>
-            <div className="space-y-2 mb-6">
-              {todayPlan.plan_blocks.map(block => (
-                <div key={block.id} className="flex items-center gap-4 p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition">
-                  <div className="text-2xl">{block.icon || '📌'}</div>
-                  <div className="flex-1">
-                    <div className="font-semibold text-slate-900">{block.title}</div>
-                    <div className="text-sm text-slate-600">{block.start_time} → {block.end_time} ({block.duration_minutes}m)</div>
-                  </div>
-                  {block.type === 'task' && (
-                    <button
-                      onClick={() => completeTask(block.task_id)}
-                      className={`px-3 py-1 rounded text-sm font-medium transition ${block.completed ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
-                    >
-                      {block.completed ? '✓ Done' : 'Mark Done'}
-                    </button>
-                  )}
-                </div>
-              ))}
+          <section className="mb-12 border border-[#155E63]/15 bg-white/70 px-5 py-8 md:px-8 md:py-10">
+            <div className="mb-8 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">Agenda</p>
+                <h2 className="mt-2 font-serif text-2xl font-medium text-[#173B3D]">Today's Plan</h2>
+              </div>
             </div>
-            <p className="text-sm text-slate-600 italic mb-4">💡 {todayPlan.reasoning}</p>
-            <button onClick={() => setScreen('replan')} className="w-full py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium">
+            <div className="mb-8">
+              {todayPlan.plan_blocks.map((block, index) => {
+                const isTask = block.type === 'task';
+                const isBreak = block.type === 'break';
+                const highlight = isTask && (block.priority === 'high' || index === 0);
+                return (
+                  <div
+                    key={block.id}
+                    className={`group relative flex gap-5 py-5 transition-colors duration-200 md:gap-8 ${
+                      index !== todayPlan.plan_blocks.length - 1 ? 'border-b border-[#155E63]/10' : ''
+                    } ${block.completed ? 'opacity-60' : ''}`}
+                  >
+                    <div className="w-16 shrink-0 pt-0.5 text-right md:w-20">
+                      <div className="font-serif text-sm text-[#155E63]">{block.start_time}</div>
+                      <div className="mt-1 text-[11px] tracking-wide text-[#8C8272]">{block.duration_minutes}m</div>
+                    </div>
+                    <div className="relative w-px shrink-0 bg-[#155E63]/20">
+                      <span
+                        className={`absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border ${
+                          highlight
+                            ? 'border-[#D7C58A] bg-[#F3E6A5]'
+                            : isBreak
+                              ? 'border-[#6F9691] bg-[#FBF8EF]'
+                              : 'border-[#155E63] bg-[#155E63]'
+                        }`}
+                      />
+                    </div>
+                    <div
+                      className={`min-w-0 flex-1 px-4 py-2 transition duration-200 ${
+                        highlight && !block.completed ? 'bg-[#F8EDBF]/60' : ''
+                      }`}
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="text-xl leading-none">{block.icon || '📌'}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className={`font-medium text-[#173B3D] ${block.completed ? 'line-through decoration-[#6F9691]/70' : ''}`}>
+                            {block.title}
+                          </div>
+                          <div className="mt-1 text-sm text-[#657574]">
+                            {block.start_time} → {block.end_time}
+                          </div>
+                        </div>
+                        {isTask && (
+                          <button
+                            onClick={() => completeTask(block.task_id)}
+                            className={`shrink-0 border px-3.5 py-1.5 text-xs tracking-[0.12em] uppercase transition duration-200 ${
+                              block.completed
+                                ? 'border-[#6F9691]/40 bg-transparent text-[#6F9691]'
+                                : 'border-[#155E63] bg-[#155E63] text-[#FBF8EF] hover:-translate-y-px hover:bg-[#103F43]'
+                            }`}
+                          >
+                            {block.completed ? '✓ Done' : 'Mark Done'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mb-6 border-t border-[#155E63]/10 pt-5 text-sm italic leading-relaxed text-[#657574]">💡 {todayPlan.reasoning}</p>
+            <button
+              onClick={() => setScreen('replan')}
+              className="w-full border border-[#155E63] bg-[#155E63] px-6 py-3 text-sm tracking-[0.16em] uppercase text-[#FBF8EF] transition duration-200 hover:-translate-y-px hover:bg-[#103F43]"
+            >
               Replan My Day
             </button>
-          </Card>
+          </section>
         ) : (
-          <Card className="mb-8 text-center py-8">
-            <Clock className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-            <p className="text-slate-600 mb-4">No plan for today yet</p>
-            <button onClick={() => setScreen('plan-input')} className="inline-block px-6 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition font-medium">
+          <section className="mb-12 border border-[#155E63]/15 bg-white/70 px-6 py-14 text-center md:px-10">
+            <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-[#F8EDBF] ring-1 ring-[#D7C58A]/80">
+              <Clock className="h-7 w-7 text-[#155E63]" />
+            </div>
+            <p className="text-[11px] tracking-[0.28em] uppercase text-[#6F9691]">No plan for today yet</p>
+            <p className="mt-3 font-serif text-xl text-[#173B3D]">Your day is ready to be planned.</p>
+            <button
+              onClick={() => setScreen('plan-input')}
+              className="mt-8 inline-block border border-[#155E63] bg-[#155E63] px-8 py-3 text-sm tracking-[0.16em] uppercase text-[#FBF8EF] transition duration-200 hover:-translate-y-px hover:bg-[#103F43]"
+            >
               Plan My Day
             </button>
-          </Card>
+          </section>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Card>
-            <h3 className="font-semibold mb-4">Pending Tasks</h3>
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+          <section className="border border-[#155E63]/15 bg-white/70 p-6 md:p-7">
+            <h3 className="font-serif text-xl font-medium text-[#173B3D]">Pending Tasks</h3>
             {tasks.filter(t => t.status === 'pending').length === 0 ? (
-              <p className="text-slate-600 text-sm">No pending tasks</p>
+              <p className="mt-5 text-sm text-[#657574]">No pending tasks</p>
             ) : (
-              <div className="space-y-2">
+              <div className="mt-5 divide-y divide-[#155E63]/10">
                 {tasks.filter(t => t.status === 'pending').slice(0, 5).map(task => (
-                  <div key={task.id} className="flex items-center gap-3 p-2 bg-slate-50 rounded">
-                    <div className="flex-1">
-                      <div className="text-sm font-medium text-slate-900">{task.title}</div>
-                      <div className="text-xs text-slate-600">{task.estimated_duration}m · {task.priority}</div>
+                  <div key={task.id} className="flex items-center gap-3 py-3.5">
+                    <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#155E63]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-[#173B3D]">{task.title}</div>
+                      <div className="mt-0.5 text-xs tracking-wide text-[#8C8272]">{task.estimated_duration}m · {task.priority}</div>
                     </div>
-                    <button onClick={() => deleteTask(task.id)} className="text-slate-400 hover:text-slate-600">×</button>
+                    <button onClick={() => deleteTask(task.id)} className="px-1 text-[#8C8272] transition duration-200 hover:text-[#103F43]">×</button>
                   </div>
                 ))}
               </div>
             )}
-            <button onClick={() => setScreen('add-task')} className="w-full mt-4 py-2 border-2 border-dashed border-slate-300 rounded-lg text-slate-600 hover:border-slate-400 hover:text-slate-700 transition text-sm font-medium">
+            <button
+              onClick={() => setScreen('add-task')}
+              className="mt-5 w-full border border-dashed border-[#6F9691] px-4 py-2.5 text-sm text-[#155E63] transition duration-200 hover:border-[#155E63] hover:bg-[#F8EDBF]/50"
+            >
               + Add Task
             </button>
-          </Card>
+          </section>
 
-          <Card>
-            <h3 className="font-semibold mb-4">Quick Actions</h3>
-            <div className="space-y-2">
-              <button onClick={() => setScreen('progress')} className="w-full p-3 bg-slate-100 hover:bg-slate-200 rounded-lg text-left text-sm font-medium text-slate-900 transition">
+          <section className="border border-[#155E63]/15 bg-white/70 p-6 md:p-7">
+            <h3 className="font-serif text-xl font-medium text-[#173B3D]">Quick Actions</h3>
+            <div className="mt-5">
+              <button
+                onClick={() => setScreen('progress')}
+                className="w-full border border-[#155E63]/15 bg-[#FBF8EF] px-4 py-3.5 text-left text-sm text-[#173B3D] transition duration-200 hover:-translate-y-px hover:border-[#D7C58A] hover:bg-[#F8EDBF]/70"
+              >
                 📊 View Progress
               </button>
             </div>
-          </Card>
+          </section>
         </div>
       </div>
     </div>
@@ -752,18 +833,18 @@ const BackButton = ({ onClick }) => (
 );
 
 const TopNav = ({ user, showMenu, setShowMenu, handleLogout, setScreen }) => (
-  <div className="bg-white border-b border-slate-200">
-    <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
-      <div className="text-2xl font-bold">🌷 Planora</div>
-      <button onClick={() => setShowMenu(!showMenu)} className="p-2 hover:bg-slate-100 rounded">
-        <Menu className="w-5 h-5" />
+  <div className="relative border-b border-[#155E63]/15 bg-[#FBF8EF]/90">
+    <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-4 md:px-8">
+      <div className="font-serif text-lg tracking-[0.08em] text-[#155E63]">🌷 Planora</div>
+      <button onClick={() => setShowMenu(!showMenu)} className="p-2 text-[#155E63] transition duration-200 hover:bg-[#F8EDBF]/70">
+        <Menu className="h-5 w-5" />
       </button>
       {showMenu && (
-        <div className="absolute right-4 top-16 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
-          <button onClick={() => { setScreen('progress'); setShowMenu(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-100">
+        <div className="absolute right-5 top-14 z-50 min-w-[10rem] border border-[#155E63]/15 bg-[#FBF8EF] shadow-sm md:right-8">
+          <button onClick={() => { setScreen('progress'); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-[#173B3D] transition duration-200 hover:bg-[#F8EDBF]/80">
             📊 Progress
           </button>
-          <button onClick={() => { handleLogout(); setShowMenu(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-100 text-red-600">
+          <button onClick={() => { handleLogout(); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-[#8C8272] transition duration-200 hover:bg-[#F8EDBF]/80 hover:text-[#103F43]">
             Logout
           </button>
         </div>

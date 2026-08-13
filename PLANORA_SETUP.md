@@ -5,7 +5,7 @@
 ### Prerequisites
 - Node.js 18+ 
 - PostgreSQL 14+
-- Anthropic API key (get at https://console.anthropic.com)
+- OpenRouter API key (get at https://openrouter.ai)
 
 ### Step 1: Clone & Install
 
@@ -21,7 +21,7 @@ cp planora_frontend.jsx src/App.jsx
 
 # Install dependencies
 npm init -y
-npm install express cors dotenv pg jsonwebtoken bcrypt anthropic
+npm install express cors dotenv pg jsonwebtoken bcrypt
 
 # For frontend (if using React)
 npm install react react-dom lucide-react
@@ -41,8 +41,8 @@ DATABASE_URL=postgresql://postgres:password@localhost:5432/planora
 # JWT
 JWT_SECRET=your-super-secret-key-change-in-production
 
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
+# OpenRouter
+OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxx
 EOF
 ```
 
@@ -76,7 +76,7 @@ You should see:
 ### Step 5: Run Frontend
 
 ```bash
-# Create a simple React app or use the artifact directly in claude.ai
+# Run the Vite frontend: npm run dev:frontend
 # Or run with Vite:
 npx create-vite@latest planora-frontend -- --template react
 cd planora-frontend
@@ -109,8 +109,7 @@ npm install \
   dotenv \
   pg \
   jsonwebtoken \
-  bcrypt \
-  @anthropic-ai/sdk
+  bcrypt
 ```
 
 #### 3. Create `.env` file
@@ -120,7 +119,7 @@ PORT=5000
 NODE_ENV=development
 DATABASE_URL=postgresql://postgres:password@localhost:5432/planora
 JWT_SECRET=dev-key-change-in-production-12345
-ANTHROPIC_API_KEY=sk-ant-your-key-here
+OPENROUTER_API_KEY=sk-or-your-key-here
 ```
 
 #### 4. Copy Backend Code
@@ -265,7 +264,7 @@ DATABASE_URL=postgresql://postgres:password@host/postgres
 
 ### Required
 ```
-ANTHROPIC_API_KEY=sk-ant-xxxxx (get from console.anthropic.com)
+OPENROUTER_API_KEY=sk-or-xxxxx (get from openrouter.ai)
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 JWT_SECRET=your-secret-key-minimum-32-chars
 ```
@@ -371,7 +370,7 @@ heroku create planora-backend
 heroku addons:create heroku-postgresql:hobby-dev
 
 # Set environment variables
-heroku config:set ANTHROPIC_API_KEY=sk-ant-xxxxx
+heroku config:set OPENROUTER_API_KEY=sk-or-xxxxx
 heroku config:set JWT_SECRET=your-secret-key
 
 # Deploy
@@ -448,11 +447,12 @@ netlify deploy --prod --dir=dist
 4. Test connection: psql $DATABASE_URL
 ```
 
-### "ANTHROPIC_API_KEY not found"
+### "OPENROUTER_API_KEY not found"
 ```
-1. Get key from console.anthropic.com
-2. Add to .env: ANTHROPIC_API_KEY=sk-ant-xxx
-3. Restart backend: node server.js
+1. Get a key from openrouter.ai
+2. Add to .env: OPENROUTER_API_KEY=sk-or-xxx
+3. Restart backend: npm start
+The app still generates plans with the deterministic fallback if the key is missing.
 ```
 
 ### "Token invalid or expired"
@@ -470,11 +470,11 @@ netlify deploy --prod --dir=dist
 4. Check browser console for network errors
 ```
 
-### "Claude API rate limited"
+### "OpenRouter rate limited"
 ```
-Anthropic free tier: 50k tokens/month
-Pro plan: Pay-as-you-go ($0.003 per input token)
-https://console.anthropic.com/account/billing
+Free-model routing uses openrouter/free.
+If OpenRouter is unavailable or rate-limited, Planora falls back to the deterministic scheduler.
+https://openrouter.ai/docs
 ```
 
 ---
@@ -550,7 +550,7 @@ app.use(limiter);
 
 ## Support & Resources
 
-- **Anthropic API Docs**: https://docs.anthropic.com
+- **OpenRouter API Docs**: https://openrouter.ai/docs
 - **Express.js**: https://expressjs.com
 - **PostgreSQL**: https://www.postgresql.org/docs
 - **Railway**: https://railway.app/docs

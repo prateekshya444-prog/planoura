@@ -11,7 +11,7 @@ An AI-powered student planner that turns overwhelming task lists into realistic 
 This is a complete, production-ready MVP with:
 
 ✅ **Full-stack application** (Frontend + Backend + Database)  
-✅ **AI scheduling** using Claude API  
+✅ **AI scheduling** using OpenRouter (with a deterministic fallback)  
 ✅ **Real authentication** (JWT, bcrypt passwords)  
 ✅ **PostgreSQL database** with proper schema  
 ✅ **Mobile-first responsive UI** (React + Tailwind)  
@@ -72,7 +72,7 @@ PORT=5000
 NODE_ENV=development
 DATABASE_URL=postgresql://postgres:password@localhost:5432/planora
 JWT_SECRET=dev-secret-key-change-in-production
-ANTHROPIC_API_KEY=sk-ant-[YOUR_KEY_HERE]
+OPENROUTER_API_KEY=sk-or-[YOUR_KEY_HERE]
 EOF
 ```
 
@@ -86,11 +86,11 @@ createdb planora
 psql postgresql://postgres:password@localhost:5432 -c "CREATE DATABASE planora;"
 ```
 
-### 4️⃣ Get Anthropic API Key
+### 4️⃣ Get OpenRouter API Key
 
-1. Go to [console.anthropic.com](https://console.anthropic.com)
+1. Go to [openrouter.ai](https://openrouter.ai)
 2. Create account → Create API key
-3. Copy key into `.env` file: `ANTHROPIC_API_KEY=sk-ant-xxx`
+3. Copy key into `.env` file: `OPENROUTER_API_KEY=sk-or-xxx`
 
 ### 5️⃣ Run Backend
 
@@ -107,9 +107,11 @@ You should see:
 
 ### 6️⃣ Run Frontend (in new terminal)
 
-Option A: Use provided React file in claude.ai (fastest)
-- Copy `planora_frontend_with_api.jsx` into claude.ai
-- Use it as a React artifact
+Option A: Vite frontend (recommended)
+```bash
+npm run dev:frontend
+```
+Open `http://localhost:5173`
 
 Option B: Full React setup
 ```bash
@@ -157,7 +159,7 @@ Open `http://localhost:5173` (frontend) and:
          ↓
 2. User tells Planora: "I have 4 hours from 6 PM"
          ↓
-3. Claude AI analyzes tasks, deadlines, priorities
+3. OpenRouter (or the deterministic fallback) analyzes tasks, deadlines, priorities
          ↓
 4. Planora creates a realistic schedule with breaks
          ↓
@@ -186,7 +188,7 @@ Open `http://localhost:5173` (frontend) and:
 │    - JWT authentication                      │
 │    - Task CRUD operations                    │
 │    - Calendar management                     │
-│    - Plan generation (calls Claude)          │
+│    - Plan generation (OpenRouter + fallback) │
 │    - Analytics & progress tracking           │
 └──────────────────┬──────────────────────────┘
                    │ (SQL queries)
@@ -199,7 +201,7 @@ Open `http://localhost:5173` (frontend) and:
 └─────────────────────────────────────────────┘
 
     ┌─────────────────────────────┐
-    │  Anthropic Claude API       │
+    │  OpenRouter API             │
     │  (AI scheduling engine)     │
     │  - Analyzes tasks           │
     │  - Creates optimal schedule │
@@ -340,7 +342,7 @@ vercel
 
 ### Required (Production)
 ```
-ANTHROPIC_API_KEY=sk-ant-xxxxx
+OPENROUTER_API_KEY=sk-or-xxxxx
 DATABASE_URL=postgresql://user:pass@host/dbname
 JWT_SECRET=random-string-minimum-32-chars
 ```
@@ -359,7 +361,7 @@ CORS_ORIGIN=https://yourdomain.com
 | Problem | Solution |
 |---------|----------|
 | "Cannot connect to database" | Check `DATABASE_URL` in `.env`, verify PostgreSQL is running |
-| "ANTHROPIC_API_KEY not found" | Get free key from console.anthropic.com, add to .env |
+| "OPENROUTER_API_KEY not found" | Get a key from openrouter.ai, add it to `.env`. Plan generation still works via the deterministic fallback without it. |
 | "Port 5000 already in use" | Change `PORT=5001` in .env |
 | "Token invalid" | Clear browser cookies, sign up again |
 | "Frontend can't reach backend" | Check backend is running on port 5000, verify CORS |
@@ -434,7 +436,7 @@ See `PLANORA_SETUP.md` for more troubleshooting.
 
 - **API Docs**: `PLANORA_ARCHITECTURE.md`
 - **Setup Guide**: `PLANORA_SETUP.md`
-- **Anthropic Docs**: https://docs.anthropic.com
+- **OpenRouter Docs**: https://openrouter.ai/docs
 - **Express.js**: https://expressjs.com
 - **PostgreSQL**: https://www.postgresql.org/docs
 
@@ -459,7 +461,7 @@ See `PLANORA_SETUP.md` for more troubleshooting.
 - Use environment-specific `.env` files
 - Enable HTTPS everywhere
 - Set up database backups
-- Monitor Claude API usage (costs money!)
+- Monitor OpenRouter usage (free-model routing still has rate limits)
 
 ---
 
