@@ -5,7 +5,7 @@
   "terminals": [
     {
       "name": "backend",
-      "command": "npm start"
+      "command": ".cursor/scripts/start-backend.sh"
     },
     {
       "name": "frontend",

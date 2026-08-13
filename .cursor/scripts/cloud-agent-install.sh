@@ -5,6 +5,8 @@ cd "$(dirname "$0")/../.."
 
 npm ci
 
+rm -rf node_modules/.vite
+
 if [[ ! -f .env ]]; then
   cat > .env << 'EOF'
 PORT=5000
