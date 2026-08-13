@@ -1,0 +1,16 @@
+{
+  "name": "Planora",
+  "install": ".cursor/scripts/cloud-agent-install.sh",
+  "start": ".cursor/scripts/cloud-agent-start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "npm start"
+    },
+    {
+      "name": "frontend",
+      "command": "npm run dev:frontend"
+    }
+  ],
+  "ports": [5000, 5173]
+}
