@@ -78,7 +78,7 @@ class APIClient {
   }
 
   async verifyToken() {
-    return this.request('GET', '/api/auth/verify-token');
+    return this.request('POST', '/api/auth/verify-token');
   }
 
   // Onboarding
