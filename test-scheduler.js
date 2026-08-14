@@ -131,6 +131,31 @@ console.log('--- Partial fit ---');
   assert.equal(unscheduled.scheduled_duration, 60);
 }
 
+console.log('--- Calendar gap: focus resets across commitment ---');
+{
+  const today = new Date().toISOString().slice(0, 10);
+  const ctx = baseCtx({
+    available_from: '09:00',
+    available_until: '17:00',
+    wake_time: '08:00',
+    sleep_time: '22:00',
+    max_focus_session: 45,
+    preferred_break_duration: 15,
+    calendar_events: [{
+      title: 'Lecture',
+      start_datetime: `${today}T14:00:00`,
+      end_datetime: `${today}T15:00:00`
+    }],
+    tasks: [task('huge', 'Huge task', 480, { priority: 'high', energy_required: 'high' })]
+  });
+  const result = scheduler.generateDeterministicSchedule(ctx);
+  assertValid(result, ctx);
+  assert(result.schedule.length > 0, 'should schedule across windows separated by calendar commitment');
+  assert(sumTaskMinutes(result.schedule, 'huge') > 0, 'huge task should be partially scheduled');
+  const unscheduled = result.unscheduled_tasks.find((u) => u.task_id === 'huge');
+  assert(unscheduled, 'huge task should remain partially unscheduled');
+}
+
 console.log('--- Prioritization: overdue first ---');
 {
   const overdue = task('o', 'Overdue', 20, { due_date: '2026-08-10', priority: 'low' });

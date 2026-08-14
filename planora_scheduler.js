@@ -247,6 +247,9 @@ const validateSchedule = (blocks, ctx) => {
     const end = parseMinutes(block.end || block.end_time);
     if (start == null || end == null || end <= start) return false;
     if (previousEnd != null && start < previousEnd) return false;
+    if (previousEnd != null && start > previousEnd) {
+      consecutiveFocus = 0;
+    }
     previousEnd = end;
 
     if (from != null && start < from) return false;
