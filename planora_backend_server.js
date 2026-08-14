@@ -469,9 +469,14 @@ const padTime = (hours, minutes) =>
   `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 
 const parseMinutes = (value) => {
-  if (!value || !TIME_RE.test(String(value).trim())) return null;
-  const [hours, minutes] = String(value).trim().split(':').map(Number);
-  return hours * 60 + minutes;
+  if (value == null || value === '') return null;
+  let text = String(value).trim();
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    text = padTime(value.getHours(), value.getMinutes());
+  }
+  const match = text.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
 };
 
 const minutesToTime = (total) => padTime(Math.floor(total / 60), total % 60);
@@ -538,6 +543,66 @@ const freeWindows = (from, until, busyIntervals) => {
 const blockOverlapsBusy = (startMinutes, endMinutes, busyIntervals) =>
   (busyIntervals || []).some((interval) => startMinutes < interval.end && interval.start < endMinutes);
 
+const clipAvailableWindow = (availableFrom, availableUntil, wakeTime, sleepTime) => {
+  const from = parseMinutes(availableFrom);
+  const until = parseMinutes(availableUntil);
+  if (from == null || until == null || until <= from) {
+    return { from: availableFrom, until: availableUntil };
+  }
+
+  let clippedFrom = from;
+  let clippedUntil = until;
+  const wake = parseMinutes(wakeTime);
+  const sleep = parseMinutes(sleepTime);
+  // Same-day wake→sleep only. Overnight windows are ambiguous in the existing schema.
+  if (wake != null && sleep != null && wake < sleep) {
+    clippedFrom = Math.max(clippedFrom, wake);
+    clippedUntil = Math.min(clippedUntil, sleep);
+  }
+
+  if (clippedUntil <= clippedFrom) {
+    return { from: availableFrom, until: availableUntil };
+  }
+  return { from: minutesToTime(clippedFrom), until: minutesToTime(clippedUntil) };
+};
+
+const validateNormalizedSchedule = (blocks, tasksToSchedule, availableFrom, availableUntil, maxFocus, busyIntervals) => {
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+  const from = parseMinutes(availableFrom);
+  const until = parseMinutes(availableUntil);
+  const focusLimit = Number(maxFocus) > 0 ? Number(maxFocus) : 90;
+  const allowedDuration = {};
+  for (const task of tasksToSchedule || []) {
+    allowedDuration[String(task.id)] = Number(task.estimated_duration) || 0;
+  }
+  const scheduledDuration = {};
+  let consecutiveFocus = 0;
+
+  for (const block of blocks) {
+    const start = parseMinutes(block.start || block.start_time);
+    const end = parseMinutes(block.end || block.end_time);
+    if (start == null || end == null || end <= start) return false;
+    if (from != null && start < from) return false;
+    if (until != null && end > until) return false;
+    if (blockOverlapsBusy(start, end, busyIntervals)) return false;
+
+    const duration = end - start;
+    if (block.type === 'task') {
+      if (duration > focusLimit) return false;
+      consecutiveFocus += duration;
+      if (consecutiveFocus > focusLimit) return false;
+      if (block.task_id) {
+        const id = String(block.task_id);
+        scheduledDuration[id] = (scheduledDuration[id] || 0) + duration;
+        if (scheduledDuration[id] > (allowedDuration[id] || 0)) return false;
+      }
+    } else if (block.type === 'break') {
+      consecutiveFocus = 0;
+    }
+  }
+  return true;
+};
+
 const scheduleOverlapsBusy = (blocks, busyIntervals) =>
   (blocks || []).some((block) => {
     const start = parseMinutes(block.start || block.start_time);
@@ -598,17 +663,23 @@ TASKS TO SCHEDULE:
 ${tasksToSchedule.map(t => `- id:${t.id} "${t.title}" (${t.estimated_duration} min, priority: ${t.priority}, energy: ${t.energy_required}, due: ${t.due_date || 'no deadline'}, category: ${t.category || 'other'})`).join('\n')}
 
 USER PREFERENCES:
-- Max focus session: ${userPreferences.max_focus_session} minutes
+- Typical energy: ${userPreferences.typical_energy || 'medium'}
+- Wake time: ${userPreferences.wake_time || 'unspecified'}
+- Sleep time: ${userPreferences.sleep_time || 'unspecified'}
+- Max focus session: ${userPreferences.max_focus_session} minutes (no task block may exceed this)
 - Preferred break: ${userPreferences.preferred_break_duration} minutes
+${userPreferences.preferred_study_hours ? `- Study hours note: ${userPreferences.preferred_study_hours}` : ''}
 
 RULES:
 1. Never schedule more than available time allows
 2. Prioritize: overdue → urgent deadlines → high priority → long tasks → energy-matched
-3. Include reasonable breaks (${userPreferences.preferred_break_duration} min every ${userPreferences.max_focus_session} min)
-4. Avoid excessive context switching
-5. Match task energy requirements to user's current energy level
-6. Never overlap fixed calendar commitments. Those intervals are unavailable.
-7. You may schedule tasks before and after calendar commitments when time remains.
+3. Insert a ${userPreferences.preferred_break_duration}-minute break before continuing after ${userPreferences.max_focus_session} minutes of focus
+4. Never create a task block longer than ${userPreferences.max_focus_session} minutes; split longer tasks across blocks with a break
+5. Avoid excessive context switching
+6. Match task energy requirements to user's current energy level
+7. Never overlap fixed calendar commitments. Those intervals are unavailable.
+8. You may schedule tasks before and after calendar commitments when time remains.
+9. Preferences are not calendar events. Calendar commitments are fixed occupied time.
 
 RETURN ONLY VALID JSON (no markdown, no explanation):
 {
@@ -734,25 +805,38 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
     const leftover = [];
 
     for (const task of queue) {
-      const duration = Number(task.estimated_duration);
-      if (!Number.isFinite(duration) || duration <= 0) continue;
+      let remaining = Number(task.estimated_duration);
+      if (!Number.isFinite(remaining) || remaining <= 0) continue;
+      let placedAny = false;
 
-      if (focusUsed > 0 && focusUsed + duration > maxFocus && currentMinutes + breakMinutes + duration <= window.end) {
-        const breakEnd = currentMinutes + breakMinutes;
-        pushBlock(currentMinutes, breakEnd, 'Break', null, 'break', 'break');
-        currentMinutes = breakEnd;
-        focusUsed = 0;
+      while (remaining > 0) {
+        if (focusUsed > 0 && (focusUsed >= maxFocus || focusUsed + Math.min(remaining, maxFocus) > maxFocus)) {
+          const nextChunk = Math.min(remaining, maxFocus);
+          if (currentMinutes + breakMinutes + nextChunk <= window.end) {
+            const breakEnd = currentMinutes + breakMinutes;
+            pushBlock(currentMinutes, breakEnd, 'Break', null, 'break', 'break');
+            currentMinutes = breakEnd;
+            focusUsed = 0;
+          } else {
+            break;
+          }
+        }
+
+        const chunk = Math.min(remaining, maxFocus - focusUsed, window.end - currentMinutes);
+        if (chunk <= 0) break;
+
+        const taskEnd = currentMinutes + chunk;
+        pushBlock(currentMinutes, taskEnd, task.title, task.id, task.category || 'other', 'task');
+        currentMinutes = taskEnd;
+        focusUsed += chunk;
+        remaining -= chunk;
+        placedAny = true;
       }
 
-      if (currentMinutes + duration > window.end) {
-        leftover.push(task);
-        continue;
+      if (remaining > 0) {
+        leftover.push({ ...task, estimated_duration: remaining });
+        if (!placedAny) continue;
       }
-
-      const taskEnd = currentMinutes + duration;
-      pushBlock(currentMinutes, taskEnd, task.title, task.id, task.category || 'other', 'task');
-      currentMinutes = taskEnd;
-      focusUsed += duration;
     }
 
     queue.length = 0;
@@ -767,9 +851,7 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
 
   return {
     schedule,
-    reasoning: busyIntervals.length > 0
-      ? 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Protected calendar commitments as occupied time and placed remaining work in the free windows around them.'
-      : 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Included breaks to protect focus within the available time.'
+    reasoning: 'Scheduled from stored preferences (focus length, breaks, energy), deadlines, priority, duration, and calendar commitments.'
   };
 };
 
@@ -840,8 +922,15 @@ const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, 
       console.error('OpenRouter returned unusable schedule data; using deterministic scheduler');
       return fallback;
     }
-    if (scheduleOverlapsBusy(normalized.schedule, busyIntervals)) {
-      console.error('OpenRouter schedule overlapped calendar commitments; using deterministic scheduler');
+    if (!validateNormalizedSchedule(
+      normalized.schedule,
+      tasksToSchedule,
+      availableFrom,
+      availableUntil,
+      userPreferences.max_focus_session,
+      busyIntervals
+    )) {
+      console.error('OpenRouter schedule failed preference/calendar validation; using deterministic scheduler');
       return fallback;
     }
     return normalized;
@@ -864,7 +953,8 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
 
     // Get user preferences
     const userResult = await pool.query(
-      'SELECT max_focus_session, preferred_break_duration FROM users WHERE id = $1',
+      `SELECT wake_time, sleep_time, preferred_study_hours, preferred_break_duration, max_focus_session, typical_energy
+       FROM users WHERE id = $1`,
       [req.userId]
     );
     const user = userResult.rows[0];
@@ -890,12 +980,17 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
     }
 
     const calendarEvents = await loadTodayCalendarEvents(req.userId);
-    const busyIntervals = toBusyIntervals(calendarEvents, available_from, available_until);
+    const window = clipAvailableWindow(available_from, available_until, user.wake_time, user.sleep_time);
+    const busyIntervals = toBusyIntervals(calendarEvents, window.from, window.until);
 
     // Generate schedule using OpenRouter, with deterministic fallback
-    const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
+    const schedule = await generateSchedule(tasks, window.from, window.until, energy_today, {
       max_focus_session: user.max_focus_session,
-      preferred_break_duration: user.preferred_break_duration
+      preferred_break_duration: user.preferred_break_duration,
+      typical_energy: user.typical_energy,
+      wake_time: user.wake_time,
+      sleep_time: user.sleep_time,
+      preferred_study_hours: user.preferred_study_hours
     }, busyIntervals);
 
     // Save plan to database
@@ -930,7 +1025,8 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
     const { date, unfinished_tasks, available_from, available_until, energy_today } = req.body;
 
     const userResult = await pool.query(
-      'SELECT max_focus_session, preferred_break_duration FROM users WHERE id = $1',
+      `SELECT wake_time, sleep_time, preferred_study_hours, preferred_break_duration, max_focus_session, typical_energy
+       FROM users WHERE id = $1`,
       [req.userId]
     );
     const user = userResult.rows[0];
@@ -955,12 +1051,17 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
     }
 
     const calendarEvents = await loadTodayCalendarEvents(req.userId);
-    const busyIntervals = toBusyIntervals(calendarEvents, available_from, available_until);
+    const window = clipAvailableWindow(available_from, available_until, user.wake_time, user.sleep_time);
+    const busyIntervals = toBusyIntervals(calendarEvents, window.from, window.until);
 
     // Generate new schedule
-    const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
+    const schedule = await generateSchedule(tasks, window.from, window.until, energy_today, {
       max_focus_session: user.max_focus_session,
-      preferred_break_duration: user.preferred_break_duration
+      preferred_break_duration: user.preferred_break_duration,
+      typical_energy: user.typical_energy,
+      wake_time: user.wake_time,
+      sleep_time: user.sleep_time,
+      preferred_study_hours: user.preferred_study_hours
     }, busyIntervals);
 
     // Update plan
