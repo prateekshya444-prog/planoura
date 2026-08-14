@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "db:init": "node -e \"require('./planora_backend_server.js').initDb().then(() => process.exit(0)).catch((err) => { console.error(err); process.exit(1); })\"",
-    "test:api": "node test-api.js"
+    "test:api": "node test-api.js",
+    "test:scheduler": "node test-scheduler.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
