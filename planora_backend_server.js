@@ -16,6 +16,9 @@ const crypto = require('crypto');
 
 dotenv.config();
 
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION = NODE_ENV === 'production';
+
 // ============================================
 // SETUP
 // ============================================
@@ -23,8 +26,48 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
+const DEV_JWT_FALLBACK = 'dev-secret-key-change-in-production';
+
+const resolveJwtSecret = () => {
+  if (process.env.JWT_SECRET) {
+    if (IS_PRODUCTION && process.env.JWT_SECRET === DEV_JWT_FALLBACK) {
+      console.error('JWT_SECRET must not use the development default in production');
+      process.exit(1);
+    }
+    return process.env.JWT_SECRET;
+  }
+  if (IS_PRODUCTION) {
+    console.error('JWT_SECRET is required in production');
+    process.exit(1);
+  }
+  return DEV_JWT_FALLBACK;
+};
+
+const JWT_SECRET = resolveJwtSecret();
+
+const resolveCorsOrigins = () => {
+  const configured = process.env.FRONTEND_ORIGIN;
+  if (configured) {
+    return configured.split(',').map((origin) => origin.trim()).filter(Boolean);
+  }
+  if (IS_PRODUCTION) {
+    console.error('FRONTEND_ORIGIN is required in production');
+    process.exit(1);
+  }
+  return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+};
+
+const corsOrigins = resolveCorsOrigins();
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || corsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Not allowed by CORS'));
+  }
+}));
 app.use(express.json());
 
 // Database
@@ -36,14 +79,112 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_FREE_MODEL = 'openrouter/free';
 const OPENROUTER_TIMEOUT_MS = 15000;
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-production';
-
 // ============================================
 // UTILITIES
 // ============================================
 
 const generateId = () => crypto.randomUUID();
+
+const PUBLIC_USER_FIELDS = [
+  'id', 'email', 'name', 'wake_time', 'sleep_time', 'preferred_study_hours',
+  'preferred_break_duration', 'max_focus_session', 'typical_energy', 'created_at', 'updated_at'
+];
+
+const toPublicUser = (user) => {
+  if (!user) return null;
+  const publicUser = {};
+  for (const field of PUBLIC_USER_FIELDS) {
+    if (user[field] !== undefined) {
+      publicUser[field] = user[field];
+    }
+  }
+  return publicUser;
+};
+
+const sanitizeErrorMessage = (err) => {
+  const raw = String((err && err.message) || err || 'unknown error');
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) return raw;
+  return raw.split(key).join('[redacted]');
+};
+
+const logServerError = (context, err) => {
+  console.error(`[${context}]`, sanitizeErrorMessage(err));
+};
+
+const sendServerError = (res, context, err, clientMessage = 'Internal server error') => {
+  logServerError(context, err);
+  res.status(500).json({ error: clientMessage });
+};
+
+const UNSCHEDULED_REASONS = {
+  NOT_ENOUGH_TIME: 'not_enough_time',
+  OUTSIDE_AVAILABLE_HOURS: 'outside_available_hours',
+  BLOCKED_BY_CALENDAR: 'blocked_by_calendar',
+  INVALID_TASK_DURATION: 'invalid_task_duration'
+};
+
+const UNSCHEDULED_MESSAGES = {
+  [UNSCHEDULED_REASONS.NOT_ENOUGH_TIME]: 'Not enough available time',
+  [UNSCHEDULED_REASONS.OUTSIDE_AVAILABLE_HOURS]: 'Outside available hours',
+  [UNSCHEDULED_REASONS.BLOCKED_BY_CALENDAR]: 'Blocked by calendar commitments',
+  [UNSCHEDULED_REASONS.INVALID_TASK_DURATION]: 'Invalid task duration'
+};
+
+const buildUnscheduledTask = (task, reason) => ({
+  task_id: task.id,
+  title: task.title,
+  reason,
+  message: UNSCHEDULED_MESSAGES[reason] || 'Could not be scheduled'
+});
+
+const encodePlanPayload = (blocks, unscheduledTasks = []) => ({
+  blocks,
+  unscheduled_tasks: unscheduledTasks
+});
+
+const decodePlanPayload = (stored) => {
+  if (Array.isArray(stored)) {
+    return { blocks: stored, unscheduled_tasks: [] };
+  }
+  if (stored && Array.isArray(stored.blocks)) {
+    return {
+      blocks: stored.blocks,
+      unscheduled_tasks: Array.isArray(stored.unscheduled_tasks) ? stored.unscheduled_tasks : []
+    };
+  }
+  return { blocks: [], unscheduled_tasks: [] };
+};
+
+const toPlanResponse = (planRow) => {
+  if (!planRow) return null;
+  const decoded = decodePlanPayload(planRow.plan_blocks);
+  return {
+    id: planRow.id,
+    plan_blocks: decoded.blocks,
+    reasoning: planRow.reasoning,
+    unscheduled_tasks: decoded.unscheduled_tasks
+  };
+};
+
+const upsertDailyPlan = async (userId, planDate, planId, schedule, isReplan = false) => {
+  const payload = encodePlanPayload(schedule.schedule, schedule.unscheduled_tasks || []);
+  const replanClause = isReplan ? ', last_replanned_at = NOW()' : '';
+  await pool.query(
+    `INSERT INTO daily_plans (id, user_id, date, plan_blocks, reasoning, generated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (user_id, date) DO UPDATE SET
+      plan_blocks = EXCLUDED.plan_blocks,
+      reasoning = EXCLUDED.reasoning,
+      generated_at = COALESCE(daily_plans.generated_at, NOW())${replanClause}`,
+    [planId, userId, planDate, JSON.stringify(payload), schedule.reasoning]
+  );
+  const saved = await pool.query(
+    'SELECT id, plan_blocks, reasoning FROM daily_plans WHERE user_id = $1 AND date = $2',
+    [userId, planDate]
+  );
+  return saved.rows[0];
+};
 
 const hashPassword = async (password) => {
   return bcrypt.hash(password, 10);
@@ -188,8 +329,7 @@ app.post('/api/auth/signup', async (req, res) => {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email already exists' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'auth/signup', err);
   }
 });
 
@@ -212,20 +352,9 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const token = createToken(user.id);
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        wake_time: user.wake_time,
-        sleep_time: user.sleep_time,
-        typical_energy: user.typical_energy
-      },
-      token
-    });
+    res.json({ user: toPublicUser(user), token });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'auth/login', err);
   }
 });
 
@@ -235,9 +364,9 @@ app.post('/api/auth/verify-token', authMiddleware, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json({ valid: true, user: result.rows[0] });
+    res.json({ valid: true, user: toPublicUser(result.rows[0]) });
   } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'auth/verify-token', err);
   }
 });
 
@@ -268,10 +397,9 @@ app.post('/api/onboarding/complete', authMiddleware, async (req, res) => {
        FROM users WHERE id = $1`,
       [req.userId]
     );
-    res.json({ user: result.rows[0] });
+    res.json({ user: toPublicUser(result.rows[0]) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'onboarding/complete', err);
   }
 });
 
@@ -296,8 +424,7 @@ app.post('/api/tasks', authMiddleware, async (req, res) => {
     const result = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
     res.json({ task: result.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'tasks/create', err);
   }
 });
 
@@ -322,8 +449,7 @@ app.get('/api/tasks', authMiddleware, async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ tasks: result.rows });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'tasks/list', err);
   }
 });
 
@@ -351,8 +477,7 @@ app.put('/api/tasks/:id', authMiddleware, async (req, res) => {
     const result = await pool.query('SELECT * FROM tasks WHERE id = $1', [id]);
     res.json({ task: result.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'tasks/update', err);
   }
 });
 
@@ -369,8 +494,7 @@ app.delete('/api/tasks/:id', authMiddleware, async (req, res) => {
     await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
     res.json({ deleted: true });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'tasks/delete', err);
   }
 });
 
@@ -389,11 +513,9 @@ app.patch('/api/tasks/:id/complete', authMiddleware, async (req, res) => {
     const result = await pool.query('SELECT * FROM tasks WHERE id = $1', [id]);
     res.json({ task: result.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'tasks/complete', err);
   }
 });
-
 // ============================================
 // CALENDAR ENDPOINTS
 // ============================================
@@ -413,8 +535,7 @@ app.get('/api/calendar', authMiddleware, async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ events: result.rows });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'calendar/list', err);
   }
 });
 
@@ -435,8 +556,7 @@ app.post('/api/calendar/events', authMiddleware, async (req, res) => {
     const result = await pool.query('SELECT * FROM calendar_events WHERE id = $1', [eventId]);
     res.json({ event: result.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'calendar/create', err);
   }
 });
 
@@ -453,13 +573,9 @@ app.delete('/api/calendar/events/:id', authMiddleware, async (req, res) => {
     await pool.query('DELETE FROM calendar_events WHERE id = $1', [id]);
     res.json({ deleted: true });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'calendar/delete', err);
   }
 });
-
-// ============================================
-// AI SCHEDULING (Core Feature)
 // ============================================
 
 const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
@@ -577,11 +693,14 @@ const validateNormalizedSchedule = (blocks, tasksToSchedule, availableFrom, avai
   }
   const scheduledDuration = {};
   let consecutiveFocus = 0;
+  let previousEnd = null;
 
   for (const block of blocks) {
     const start = parseMinutes(block.start || block.start_time);
     const end = parseMinutes(block.end || block.end_time);
     if (start == null || end == null || end <= start) return false;
+    if (previousEnd != null && start < previousEnd) return false;
+    previousEnd = end;
     if (from != null && start < from) return false;
     if (until != null && end > until) return false;
     if (blockOverlapsBusy(start, end, busyIntervals)) return false;
@@ -601,6 +720,18 @@ const validateNormalizedSchedule = (blocks, tasksToSchedule, availableFrom, avai
     }
   }
   return true;
+};
+
+const computeUnscheduledFromSchedule = (blocks, tasksToSchedule) => {
+  const scheduledIds = new Set();
+  for (const block of blocks || []) {
+    if (block.type === 'task' && block.task_id) {
+      scheduledIds.add(String(block.task_id));
+    }
+  }
+  return (tasksToSchedule || [])
+    .filter((task) => !scheduledIds.has(String(task.id)))
+    .map((task) => buildUnscheduledTask(task, UNSCHEDULED_REASONS.NOT_ENOUGH_TIME));
 };
 
 const scheduleOverlapsBusy = (blocks, busyIntervals) =>
@@ -633,13 +764,6 @@ const toDateKey = (value) => {
     return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : null;
   }
   return date.toISOString().slice(0, 10);
-};
-
-const sanitizeErrorMessage = (err) => {
-  const raw = String((err && err.message) || err || 'unknown error');
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) return raw;
-  return raw.split(key).join('[redacted]');
 };
 
 const buildSchedulePrompt = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
@@ -737,7 +861,7 @@ const normalizeSchedule = (parsed, tasksToSchedule) => {
     ? parsed.reasoning.trim()
     : 'Schedule generated from your tasks, deadlines, energy, and available time.';
 
-  return { schedule: blocks, reasoning };
+  return { schedule: blocks, reasoning, unscheduled_tasks: computeUnscheduledFromSchedule(blocks, tasksToSchedule) };
 };
 
 const generateDeterministicSchedule = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
@@ -775,13 +899,26 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
   if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
     return {
       schedule: [],
+      unscheduled_tasks: (tasksToSchedule || []).map((task) =>
+        buildUnscheduledTask(task, UNSCHEDULED_REASONS.OUTSIDE_AVAILABLE_HOURS)
+      ),
       reasoning: 'Available time window is invalid, so no blocks were scheduled.'
     };
   }
 
   const windows = freeWindows(startMinutes, endMinutes, busyIntervals);
+  if (windows.length === 0) {
+    return {
+      schedule: [],
+      unscheduled_tasks: (tasksToSchedule || []).map((task) =>
+        buildUnscheduledTask(task, UNSCHEDULED_REASONS.BLOCKED_BY_CALENDAR)
+      ),
+      reasoning: 'Calendar commitments block the available planning window.'
+    };
+  }
   const schedule = [];
   const queue = [...sortedTasks];
+  const invalidTasks = [];
   let lastCursor = null;
   let lastWindowEnd = null;
 
@@ -806,7 +943,10 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
 
     for (const task of queue) {
       let remaining = Number(task.estimated_duration);
-      if (!Number.isFinite(remaining) || remaining <= 0) continue;
+      if (!Number.isFinite(remaining) || remaining <= 0) {
+        invalidTasks.push(task);
+        continue;
+      }
       let placedAny = false;
 
       while (remaining > 0) {
@@ -834,23 +974,34 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
       }
 
       if (remaining > 0) {
-        leftover.push({ ...task, estimated_duration: remaining });
-        if (!placedAny) continue;
+        leftover.push({
+          task: { ...task, estimated_duration: remaining },
+          reason: placedAny ? UNSCHEDULED_REASONS.NOT_ENOUGH_TIME : UNSCHEDULED_REASONS.NOT_ENOUGH_TIME
+        });
       }
     }
 
     queue.length = 0;
-    queue.push(...leftover);
+    queue.push(...leftover.map((entry) => entry.task));
     lastCursor = currentMinutes;
     lastWindowEnd = window.end;
   }
 
-  if (lastCursor != null && lastCursor < lastWindowEnd) {
+  if (lastCursor != null && lastWindowEnd != null && lastCursor < lastWindowEnd) {
     pushBlock(lastCursor, lastWindowEnd, 'Buffer / Review', null, 'buffer', 'buffer');
+  }
+
+  const unscheduledMap = new Map();
+  for (const task of invalidTasks) {
+    unscheduledMap.set(String(task.id), buildUnscheduledTask(task, UNSCHEDULED_REASONS.INVALID_TASK_DURATION));
+  }
+  for (const task of queue) {
+    unscheduledMap.set(String(task.id), buildUnscheduledTask(task, UNSCHEDULED_REASONS.NOT_ENOUGH_TIME));
   }
 
   return {
     schedule,
+    unscheduled_tasks: Array.from(unscheduledMap.values()),
     reasoning: 'Scheduled from stored preferences (focus length, breaks, energy), deadlines, priority, duration, and calendar commitments.'
   };
 };
@@ -933,7 +1084,10 @@ const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, 
       console.error('OpenRouter schedule failed preference/calendar validation; using deterministic scheduler');
       return fallback;
     }
-    return normalized;
+    return {
+      ...normalized,
+      unscheduled_tasks: normalized.unscheduled_tasks || computeUnscheduledFromSchedule(normalized.schedule, tasksToSchedule)
+    };
   } catch (err) {
     if (err && err.name === 'AbortError') {
       console.error('OpenRouter request timed out; using deterministic scheduler');
@@ -968,15 +1122,17 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
       [req.userId, 'pending']
     );
     const tasks = tasksResult.rows;
+    const today = new Date().toISOString().split('T')[0];
+    const planId = generateId();
 
     if (tasks.length === 0) {
-      return res.json({
-        plan: {
-          id: generateId(),
-          plan_blocks: [],
-          reasoning: 'No pending tasks for today.'
-        }
-      });
+      const emptySchedule = {
+        schedule: [],
+        unscheduled_tasks: [],
+        reasoning: 'No pending tasks for today.'
+      };
+      const saved = await upsertDailyPlan(req.userId, today, planId, emptySchedule, false);
+      return res.json({ plan: toPlanResponse(saved) });
     }
 
     const calendarEvents = await loadTodayCalendarEvents(req.userId);
@@ -993,30 +1149,10 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
       preferred_study_hours: user.preferred_study_hours
     }, busyIntervals);
 
-    // Save plan to database
-    const planId = generateId();
-    const today = new Date().toISOString().split('T')[0];
-
-    await pool.query(
-      `INSERT INTO daily_plans (id, user_id, date, plan_blocks, reasoning, generated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (user_id, date) DO UPDATE SET
-        plan_blocks = $4,
-        reasoning = $5,
-        generated_at = NOW()`,
-      [planId, req.userId, today, JSON.stringify(schedule.schedule), schedule.reasoning]
-    );
-
-    res.json({
-      plan: {
-        id: planId,
-        plan_blocks: schedule.schedule,
-        reasoning: schedule.reasoning
-      }
-    });
+    const saved = await upsertDailyPlan(req.userId, today, planId, schedule, false);
+    res.json({ plan: toPlanResponse(saved) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message || 'Failed to generate plan' });
+    sendServerError(res, 'plan/generate-today', err, 'Failed to generate plan');
   }
 });
 
@@ -1040,14 +1176,17 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
       [req.userId, 'pending']
     );
     const tasks = tasksResult.rows;
+    const planDate = date || new Date().toISOString().split('T')[0];
+    const planId = generateId();
 
     if (tasks.length === 0) {
-      return res.json({
-        plan: {
-          plan_blocks: [],
-          reasoning: 'All tasks completed!'
-        }
-      });
+      const emptySchedule = {
+        schedule: [],
+        unscheduled_tasks: [],
+        reasoning: 'All tasks completed!'
+      };
+      const saved = await upsertDailyPlan(req.userId, planDate, planId, emptySchedule, true);
+      return res.json({ plan: toPlanResponse(saved) });
     }
 
     const calendarEvents = await loadTodayCalendarEvents(req.userId);
@@ -1064,26 +1203,10 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
       preferred_study_hours: user.preferred_study_hours
     }, busyIntervals);
 
-    // Update plan
-    const planDate = date || new Date().toISOString().split('T')[0];
-    await pool.query(
-      `UPDATE daily_plans SET 
-        plan_blocks = $1,
-        reasoning = $2,
-        last_replanned_at = NOW()
-       WHERE user_id = $3 AND date = $4`,
-      [JSON.stringify(schedule.schedule), schedule.reasoning, req.userId, planDate]
-    );
-
-    res.json({
-      plan: {
-        plan_blocks: schedule.schedule,
-        reasoning: schedule.reasoning
-      }
-    });
+    const saved = await upsertDailyPlan(req.userId, planDate, planId, schedule, true);
+    res.json({ plan: toPlanResponse(saved) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message || 'Failed to replan' });
+    sendServerError(res, 'plan/replan', err, 'Failed to replan');
   }
 });
 
@@ -1091,7 +1214,7 @@ app.get('/api/plan/today', authMiddleware, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const result = await pool.query(
-      'SELECT * FROM daily_plans WHERE user_id = $1 AND date = $2',
+      'SELECT id, plan_blocks, reasoning FROM daily_plans WHERE user_id = $1 AND date = $2',
       [req.userId, today]
     );
 
@@ -1099,17 +1222,9 @@ app.get('/api/plan/today', authMiddleware, async (req, res) => {
       return res.json({ plan: null });
     }
 
-    const plan = result.rows[0];
-    res.json({
-      plan: {
-        id: plan.id,
-        plan_blocks: plan.plan_blocks,
-        reasoning: plan.reasoning
-      }
-    });
+    res.json({ plan: toPlanResponse(result.rows[0]) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'plan/today', err);
   }
 });
 
@@ -1159,8 +1274,7 @@ app.get('/api/analytics/progress', authMiddleware, async (req, res) => {
       ].filter(Boolean)
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    sendServerError(res, 'analytics/progress', err);
   }
 });
 
@@ -1210,7 +1324,20 @@ if (require.main === module) {
   start();
 }
 
-module.exports = { app, pool, initDb };
+module.exports = {
+  app,
+  pool,
+  initDb,
+  toPublicUser,
+  toPlanResponse,
+  decodePlanPayload,
+  validateNormalizedSchedule,
+  generateDeterministicSchedule,
+  generateSchedule,
+  sanitizeErrorMessage,
+  resolveJwtSecret,
+  resolveCorsOrigins
+};
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
