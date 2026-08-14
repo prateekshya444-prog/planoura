@@ -476,6 +476,90 @@ const parseMinutes = (value) => {
 
 const minutesToTime = (total) => padTime(Math.floor(total / 60), total % 60);
 
+const clockMinutesFromDatetime = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const match = value.match(/[T ](\d{2}):(\d{2})/);
+    if (match) return Number(match[1]) * 60 + Number(match[2]);
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getHours() * 60 + date.getMinutes();
+};
+
+const toBusyIntervals = (events, availableFrom, availableUntil) => {
+  const from = parseMinutes(availableFrom);
+  const until = parseMinutes(availableUntil);
+  if (from == null || until == null) return [];
+
+  const raw = [];
+  for (const event of events || []) {
+    const start = clockMinutesFromDatetime(event.start_datetime);
+    const end = clockMinutesFromDatetime(event.end_datetime);
+    if (start == null || end == null || end <= start) continue;
+    const clippedStart = Math.max(start, from);
+    const clippedEnd = Math.min(end, until);
+    if (clippedEnd <= clippedStart) continue;
+    raw.push({
+      start: clippedStart,
+      end: clippedEnd,
+      title: event.title,
+      type: event.type
+    });
+  }
+
+  raw.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const interval of raw) {
+    const last = merged[merged.length - 1];
+    if (last && interval.start <= last.end) {
+      last.end = Math.max(last.end, interval.end);
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+  return merged;
+};
+
+const freeWindows = (from, until, busyIntervals) => {
+  const windows = [];
+  let cursor = from;
+  for (const interval of busyIntervals || []) {
+    if (interval.end <= from || interval.start >= until) continue;
+    const start = Math.max(interval.start, from);
+    const end = Math.min(interval.end, until);
+    if (start > cursor) windows.push({ start: cursor, end: start });
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < until) windows.push({ start: cursor, end: until });
+  return windows.filter((window) => window.end > window.start);
+};
+
+const blockOverlapsBusy = (startMinutes, endMinutes, busyIntervals) =>
+  (busyIntervals || []).some((interval) => startMinutes < interval.end && interval.start < endMinutes);
+
+const scheduleOverlapsBusy = (blocks, busyIntervals) =>
+  (blocks || []).some((block) => {
+    const start = parseMinutes(block.start || block.start_time);
+    const end = parseMinutes(block.end || block.end_time);
+    if (start == null || end == null) return false;
+    return blockOverlapsBusy(start, end, busyIntervals);
+  });
+
+const loadTodayCalendarEvents = async (userId) => {
+  const today = new Date().toISOString().split('T')[0];
+  const result = await pool.query(
+    `SELECT title, type, start_datetime, end_datetime
+     FROM calendar_events
+     WHERE user_id = $1
+       AND start_datetime < ($2::date + INTERVAL '1 day')
+       AND end_datetime > $2::date
+     ORDER BY start_datetime ASC`,
+    [userId, today]
+  );
+  return result.rows;
+};
+
 const toDateKey = (value) => {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -493,13 +577,22 @@ const sanitizeErrorMessage = (err) => {
   return raw.split(key).join('[redacted]');
 };
 
-const buildSchedulePrompt = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) =>
-  `You are an intelligent scheduling assistant for Planora, a student planner app.
+const buildSchedulePrompt = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
+  const calendarLines = (busyIntervals || []).length > 0
+    ? busyIntervals.map((interval) =>
+      `- ${minutesToTime(interval.start)}–${minutesToTime(interval.end)} "${interval.title || 'Commitment'}" (${interval.type || 'calendar'})`
+    ).join('\n')
+    : '- none';
+
+  return `You are an intelligent scheduling assistant for Planora, a student planner app.
 
 AVAILABLE TIME:
 From: ${availableFrom}
 Until: ${availableUntil}
 Energy Level: ${energyLevel}
+
+FIXED CALENDAR COMMITMENTS (occupied time — not tasks to complete):
+${calendarLines}
 
 TASKS TO SCHEDULE:
 ${tasksToSchedule.map(t => `- id:${t.id} "${t.title}" (${t.estimated_duration} min, priority: ${t.priority}, energy: ${t.energy_required}, due: ${t.due_date || 'no deadline'}, category: ${t.category || 'other'})`).join('\n')}
@@ -514,6 +607,8 @@ RULES:
 3. Include reasonable breaks (${userPreferences.preferred_break_duration} min every ${userPreferences.max_focus_session} min)
 4. Avoid excessive context switching
 5. Match task energy requirements to user's current energy level
+6. Never overlap fixed calendar commitments. Those intervals are unavailable.
+7. You may schedule tasks before and after calendar commitments when time remains.
 
 RETURN ONLY VALID JSON (no markdown, no explanation):
 {
@@ -529,6 +624,7 @@ RETURN ONLY VALID JSON (no markdown, no explanation):
   ],
   "reasoning": "1-2 sentences explaining prioritization"
 }`;
+};
 
 const normalizeSchedule = (parsed, tasksToSchedule) => {
   if (!parsed || !Array.isArray(parsed.schedule)) return null;
@@ -573,7 +669,7 @@ const normalizeSchedule = (parsed, tasksToSchedule) => {
   return { schedule: blocks, reasoning };
 };
 
-const generateDeterministicSchedule = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+const generateDeterministicSchedule = (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
   const startMinutes = parseMinutes(availableFrom);
   const endMinutes = parseMinutes(availableUntil);
   const maxFocus = Number(userPreferences.max_focus_session) > 0 ? Number(userPreferences.max_focus_session) : 90;
@@ -605,10 +701,6 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
     return Number(b.estimated_duration || 0) - Number(a.estimated_duration || 0);
   });
 
-  const schedule = [];
-  let currentMinutes = startMinutes;
-  let focusUsed = 0;
-
   if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
     return {
       schedule: [],
@@ -616,66 +708,72 @@ const generateDeterministicSchedule = (tasksToSchedule, availableFrom, available
     };
   }
 
-  for (const task of sortedTasks) {
-    const duration = Number(task.estimated_duration);
-    if (!Number.isFinite(duration) || duration <= 0) continue;
+  const windows = freeWindows(startMinutes, endMinutes, busyIntervals);
+  const schedule = [];
+  const queue = [...sortedTasks];
+  let lastCursor = null;
+  let lastWindowEnd = null;
 
-    if (focusUsed > 0 && focusUsed + duration > maxFocus && currentMinutes + breakMinutes + duration <= endMinutes) {
-      const breakEnd = currentMinutes + breakMinutes;
-      schedule.push({
-        start: minutesToTime(currentMinutes),
-        end: minutesToTime(breakEnd),
-        start_time: minutesToTime(currentMinutes),
-        end_time: minutesToTime(breakEnd),
-        duration_minutes: breakMinutes,
-        title: 'Break',
-        task_id: null,
-        category: 'break',
-        type: 'break'
-      });
-      currentMinutes = breakEnd;
-      focusUsed = 0;
+  const pushBlock = (start, end, title, taskId, category, type) => {
+    schedule.push({
+      start: minutesToTime(start),
+      end: minutesToTime(end),
+      start_time: minutesToTime(start),
+      end_time: minutesToTime(end),
+      duration_minutes: end - start,
+      title,
+      task_id: taskId,
+      category,
+      type
+    });
+  };
+
+  for (const window of windows) {
+    let currentMinutes = window.start;
+    let focusUsed = 0;
+    const leftover = [];
+
+    for (const task of queue) {
+      const duration = Number(task.estimated_duration);
+      if (!Number.isFinite(duration) || duration <= 0) continue;
+
+      if (focusUsed > 0 && focusUsed + duration > maxFocus && currentMinutes + breakMinutes + duration <= window.end) {
+        const breakEnd = currentMinutes + breakMinutes;
+        pushBlock(currentMinutes, breakEnd, 'Break', null, 'break', 'break');
+        currentMinutes = breakEnd;
+        focusUsed = 0;
+      }
+
+      if (currentMinutes + duration > window.end) {
+        leftover.push(task);
+        continue;
+      }
+
+      const taskEnd = currentMinutes + duration;
+      pushBlock(currentMinutes, taskEnd, task.title, task.id, task.category || 'other', 'task');
+      currentMinutes = taskEnd;
+      focusUsed += duration;
     }
 
-    if (currentMinutes + duration > endMinutes) continue;
-
-    const taskEnd = currentMinutes + duration;
-    schedule.push({
-      start: minutesToTime(currentMinutes),
-      end: minutesToTime(taskEnd),
-      start_time: minutesToTime(currentMinutes),
-      end_time: minutesToTime(taskEnd),
-      duration_minutes: duration,
-      title: task.title,
-      task_id: task.id,
-      category: task.category || 'other',
-      type: 'task'
-    });
-    currentMinutes = taskEnd;
-    focusUsed += duration;
+    queue.length = 0;
+    queue.push(...leftover);
+    lastCursor = currentMinutes;
+    lastWindowEnd = window.end;
   }
 
-  if (currentMinutes < endMinutes) {
-    schedule.push({
-      start: minutesToTime(currentMinutes),
-      end: minutesToTime(endMinutes),
-      start_time: minutesToTime(currentMinutes),
-      end_time: minutesToTime(endMinutes),
-      duration_minutes: endMinutes - currentMinutes,
-      title: 'Buffer / Review',
-      task_id: null,
-      category: 'buffer',
-      type: 'buffer'
-    });
+  if (lastCursor != null && lastCursor < lastWindowEnd) {
+    pushBlock(lastCursor, lastWindowEnd, 'Buffer / Review', null, 'buffer', 'buffer');
   }
 
   return {
     schedule,
-    reasoning: 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Included breaks to protect focus within the available time.'
+    reasoning: busyIntervals.length > 0
+      ? 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Protected calendar commitments as occupied time and placed remaining work in the free windows around them.'
+      : 'Prioritized by overdue tasks, deadline proximity, priority, energy match, and duration. Included breaks to protect focus within the available time.'
   };
 };
 
-const generateScheduleWithOpenRouter = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+const generateScheduleWithOpenRouter = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
   const apiKey = process.env.OPENROUTER_API_KEY;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
@@ -692,7 +790,7 @@ const generateScheduleWithOpenRouter = async (tasksToSchedule, availableFrom, av
         max_tokens: 1000,
         messages: [{
           role: 'user',
-          content: buildSchedulePrompt(tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences)
+          content: buildSchedulePrompt(tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals)
         }]
       }),
       signal: controller.signal
@@ -713,13 +811,14 @@ const generateScheduleWithOpenRouter = async (tasksToSchedule, availableFrom, av
   }
 };
 
-const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences) => {
+const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, energyLevel, userPreferences, busyIntervals = []) => {
   const fallback = generateDeterministicSchedule(
     tasksToSchedule,
     availableFrom,
     availableUntil,
     energyLevel,
-    userPreferences
+    userPreferences,
+    busyIntervals
   );
 
   if (!process.env.OPENROUTER_API_KEY) {
@@ -733,11 +832,16 @@ const generateSchedule = async (tasksToSchedule, availableFrom, availableUntil, 
       availableFrom,
       availableUntil,
       energyLevel,
-      userPreferences
+      userPreferences,
+      busyIntervals
     );
     const normalized = normalizeSchedule(parsed, tasksToSchedule);
     if (!normalized) {
       console.error('OpenRouter returned unusable schedule data; using deterministic scheduler');
+      return fallback;
+    }
+    if (scheduleOverlapsBusy(normalized.schedule, busyIntervals)) {
+      console.error('OpenRouter schedule overlapped calendar commitments; using deterministic scheduler');
       return fallback;
     }
     return normalized;
@@ -785,11 +889,14 @@ app.post('/api/plan/generate-today', authMiddleware, async (req, res) => {
       });
     }
 
+    const calendarEvents = await loadTodayCalendarEvents(req.userId);
+    const busyIntervals = toBusyIntervals(calendarEvents, available_from, available_until);
+
     // Generate schedule using OpenRouter, with deterministic fallback
     const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
       max_focus_session: user.max_focus_session,
       preferred_break_duration: user.preferred_break_duration
-    });
+    }, busyIntervals);
 
     // Save plan to database
     const planId = generateId();
@@ -847,11 +954,14 @@ app.post('/api/plan/replan', authMiddleware, async (req, res) => {
       });
     }
 
+    const calendarEvents = await loadTodayCalendarEvents(req.userId);
+    const busyIntervals = toBusyIntervals(calendarEvents, available_from, available_until);
+
     // Generate new schedule
     const schedule = await generateSchedule(tasks, available_from, available_until, energy_today, {
       max_focus_session: user.max_focus_session,
       preferred_break_duration: user.preferred_break_duration
-    });
+    }, busyIntervals);
 
     // Update plan
     const planDate = date || new Date().toISOString().split('T')[0];
