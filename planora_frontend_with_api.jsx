@@ -204,6 +204,65 @@ const formatDateTime = (value) => {
   });
 };
 
+const todayKey = () => new Date().toISOString().slice(0, 10);
+
+const isCompletedToday = (task) => {
+  if (!task || task.status !== 'completed') return false;
+  if (!task.completed_at) return true;
+  return String(task.completed_at).slice(0, 10) === todayKey();
+};
+
+const parseClockMinutes = (value) => {
+  if (!value) return null;
+  const match = String(value).trim().match(/^([01]?\d|2[0-3]):([0-5]\d)/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+};
+
+const nowClockMinutes = () => {
+  const date = new Date();
+  return date.getHours() * 60 + date.getMinutes();
+};
+
+const blockDuration = (block) => {
+  if (Number(block?.duration_minutes) > 0) return Number(block.duration_minutes);
+  const start = parseClockMinutes(block?.start_time || block?.start);
+  const end = parseClockMinutes(block?.end_time || block?.end);
+  if (start == null || end == null || end <= start) return 0;
+  return end - start;
+};
+
+const isBlockDone = (block, taskById = {}) => {
+  if (block?.completed) return true;
+  const linked = block?.task_id ? taskById[String(block.task_id)] : null;
+  return Boolean(linked && linked.status === 'completed');
+};
+
+const formatDuration = (minutes) => {
+  const total = Math.max(0, Number(minutes) || 0);
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (hours && mins) return `${hours}h ${mins}m`;
+  if (hours) return `${hours}h`;
+  return `${mins}m`;
+};
+
+const focusFromBlocks = (blocks = []) => {
+  const now = nowClockMinutes();
+  const timed = blocks.map((block, index) => ({
+    block,
+    index,
+    start: parseClockMinutes(block.start_time || block.start),
+    end: parseClockMinutes(block.end_time || block.end)
+  })).filter((item) => item.start != null && item.end != null);
+
+  const current = timed.find((item) => now >= item.start && now < item.end);
+  if (current) return { kind: 'now', index: current.index, block: current.block };
+  const upcoming = timed.filter((item) => item.start > now).sort((a, b) => a.start - b.start)[0];
+  if (upcoming) return { kind: 'next', index: upcoming.index, block: upcoming.block };
+  return { kind: null, index: null, block: null };
+};
+
 export default function PlanoraApp() {
   const [screen, setScreen] = useState('splash');
   const [user, setUser] = useState(null);
@@ -316,17 +375,19 @@ export default function PlanoraApp() {
     if (!taskId) return;
     try {
       await api.completeTask(taskId);
-      setTasks(tasks.map(t =>
-        t.id === taskId ? { ...t, status: 'completed', completed_at: new Date().toISOString() } : t
+      const completedAt = new Date().toISOString();
+      setTasks((prev) => prev.map((task) =>
+        task.id === taskId ? { ...task, status: 'completed', completed_at: completedAt } : task
       ));
-      if (todayPlan) {
-        setTodayPlan({
-          ...todayPlan,
-          plan_blocks: todayPlan.plan_blocks.map(b =>
-            b.task_id === taskId ? { ...b, completed: true } : b
+      setTodayPlan((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          plan_blocks: (prev.plan_blocks || []).map((block) =>
+            block.task_id === taskId ? { ...block, completed: true } : block
           )
-        });
-      }
+        };
+      });
     } catch (err) {
       setError(err.message);
     }
@@ -672,12 +733,26 @@ const TodayScreen = ({
   goTo
 }) => {
   const pending = tasks.filter((t) => t.status === 'pending');
-  const completedCount = tasks.filter((t) => t.status === 'completed').length;
-  const totalCount = tasks.length;
-  const remaining = totalCount - completedCount;
+  const overduePending = pending.filter((t) => dueMeta(t.due_date)?.kind === 'overdue');
+  const orderedPending = [
+    ...overduePending,
+    ...pending.filter((t) => dueMeta(t.due_date)?.kind !== 'overdue')
+  ];
+  const completedToday = tasks.filter(isCompletedToday).length;
+  const remaining = pending.length;
+  const taskById = Object.fromEntries(tasks.map((task) => [String(task.id), task]));
+  const blocks = todayPlan?.plan_blocks || [];
+  const scheduledDone = blocks.reduce((sum, block) => (
+    isBlockDone(block, taskById) ? sum + blockDuration(block) : sum
+  ), 0);
+  const scheduledLeft = blocks.reduce((sum, block) => (
+    isBlockDone(block, taskById) ? sum : sum + blockDuration(block)
+  ), 0);
+  const hasAgenda = Boolean(todayPlan && blocks.length > 0);
+  const focus = hasAgenda ? focusFromBlocks(blocks) : { kind: null, index: null, block: null };
 
   return (
-    <div className="min-h-screen bg-[#FBF8EF] text-[#173B3D]">
+    <div className="min-h-screen overflow-x-hidden bg-[#FBF8EF] text-[#173B3D]">
       <TopNav
         user={user}
         screen={screen}
@@ -686,39 +761,40 @@ const TodayScreen = ({
         handleLogout={handleLogout}
         goTo={goTo}
       />
-      <div className="mx-auto max-w-4xl px-5 pb-28 pt-10 md:px-8 md:pb-16 md:pt-14">
+      <div className="mx-auto max-w-4xl px-4 pb-28 pt-10 sm:px-5 md:px-8 md:pb-16 md:pt-14">
         <ErrorBanner message={error} />
 
         <header className="pb-10 md:pb-14">
           <p className="text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">{formatLongDate()}</p>
-          <h1 className="mt-4 max-w-2xl font-serif text-[2rem] font-medium leading-[1.15] text-[#173B3D] md:text-[2.45rem]">
+          <h1 className="mt-4 max-w-2xl break-words font-serif text-[1.85rem] font-medium leading-[1.15] text-[#173B3D] md:text-[2.45rem]">
             {greetingForNow()}, {user?.name}
           </h1>
           <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-[#657574]">
-            {todayPlan
+            {hasAgenda
               ? 'Your day is arranged. Move through it one block at a time.'
-              : 'Nothing is wrong — the day simply hasn’t been planned yet.'}
+              : 'Your day is ready to be planned.'}
           </p>
         </header>
 
-        <div className="mb-12 grid grid-cols-2 border border-[#155E63]/15 bg-white/50 md:grid-cols-4">
-          <Stat label="Completed" value={completedCount} accent />
+        <div className="mb-10 grid grid-cols-2 border border-[#155E63]/15 bg-white/50 md:grid-cols-4">
+          <Stat label="Done today" value={completedToday} accent />
           <Stat label="Remaining" value={remaining} />
-          <Stat label="All tasks" value={totalCount} />
-          <Stat label="Today’s plan" value={todayPlan ? 'Set' : 'Open'} accent={Boolean(todayPlan)} last />
+          <Stat label="Time kept" value={hasAgenda ? formatDuration(scheduledDone) : '—'} />
+          <Stat label="Time left" value={hasAgenda ? formatDuration(scheduledLeft) : '—'} accent={hasAgenda} last />
         </div>
 
-        {loading && !todayPlan && pending.length === 0 ? (
+        {loading && !hasAgenda && pending.length === 0 ? (
           <TodaySkeleton />
-        ) : todayPlan && todayPlan.plan_blocks && todayPlan.plan_blocks.length > 0 ? (
-          <section className="mb-14">
-            <div className="mb-8 flex items-end justify-between gap-4">
+        ) : hasAgenda ? (
+          <section className={`mb-14 ${loading ? 'opacity-80 transition-opacity duration-200' : ''}`}>
+            <FocusStrip focus={focus} taskById={taskById} />
+            <div className="mb-6 mt-8 flex items-end justify-between gap-4">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">Agenda</p>
                 <h2 className="mt-2 font-serif text-2xl font-medium">Today’s plan</h2>
               </div>
             </div>
-            <AgendaTimeline plan={todayPlan} tasks={tasks} completeTask={completeTask} />
+            <AgendaTimeline plan={todayPlan} tasks={tasks} completeTask={completeTask} highlightNow />
             {todayPlan.reasoning && (
               <p className="mt-8 max-w-2xl border-t border-[#155E63]/10 pt-5 text-sm italic leading-relaxed text-[#657574]">
                 {todayPlan.reasoning}
@@ -732,7 +808,7 @@ const TodayScreen = ({
           <section className="mb-14 py-6 md:py-10">
             <Clock className="h-6 w-6 text-[#155E63]" />
             <p className="mt-6 text-[11px] uppercase tracking-[0.28em] text-[#6F9691]">Unplanned</p>
-            <h2 className="mt-3 font-serif text-2xl font-medium">Your day is ready when you are.</h2>
+            <h2 className="mt-3 font-serif text-2xl font-medium">Your day is ready to be planned.</h2>
             <p className="mt-3 max-w-md text-[15px] leading-relaxed text-[#657574]">
               Add a few tasks, then let Planora arrange them around the time you actually have.
             </p>
@@ -744,15 +820,15 @@ const TodayScreen = ({
         )}
 
         <div className="grid grid-cols-1 gap-12 md:grid-cols-5">
-          <section className="md:col-span-3">
+          <section className="min-w-0 md:col-span-3">
             <h3 className="font-serif text-xl font-medium">Pending</h3>
-            {pending.length === 0 ? (
+            {orderedPending.length === 0 ? (
               <p className="mt-5 text-sm leading-relaxed text-[#657574]">
                 No open tasks. When something needs time, add it here.
               </p>
             ) : (
               <div className="mt-5 divide-y divide-[#155E63]/10">
-                {pending.slice(0, 6).map((task) => (
+                {orderedPending.slice(0, 6).map((task) => (
                   <TaskRow key={task.id} task={task} onDelete={() => deleteTask(task.id)} onComplete={() => completeTask(task.id)} />
                 ))}
               </div>
@@ -765,7 +841,7 @@ const TodayScreen = ({
             </button>
           </section>
 
-          <section className="md:col-span-2">
+          <section className="min-w-0 md:col-span-2">
             <h3 className="font-serif text-xl font-medium">Move with intention</h3>
             <div className="mt-5 space-y-2">
               <QuietAction onClick={() => goTo('plan-input')} label="Plan my day" hint="Arrange remaining work" />
@@ -980,68 +1056,77 @@ const CalendarScreen = ({ events, onSubmit, onDelete, loading, error }) => {
   );
 };
 
-const AgendaTimeline = ({ plan, tasks = [], completeTask }) => {
+const AgendaTimeline = ({ plan, tasks = [], completeTask, highlightNow = false }) => {
   const blocks = plan?.plan_blocks || [];
   const taskById = Object.fromEntries(tasks.map((task) => [String(task.id), task]));
+  const focus = highlightNow ? focusFromBlocks(blocks) : { kind: null, index: null };
 
   return (
-    <div>
+    <div className="min-w-0">
       {blocks.map((block, index) => {
         const isTask = block.type === 'task';
         const isBreak = block.type === 'break';
         const linked = block.task_id ? taskById[String(block.task_id)] : null;
-        const highlight = isTask && ((linked && linked.priority === 'high') || block.priority === 'high' || index === 0);
+        const done = isBlockDone(block, taskById);
         const start = block.start_time || block.start;
         const end = block.end_time || block.end;
+        const duration = blockDuration(block);
+        const isNow = highlightNow && focus.index === index && focus.kind === 'now';
+        const isNext = highlightNow && focus.index === index && focus.kind === 'next';
+        const category = linked?.category || block.category || block.type;
         return (
           <div
             key={`${start}-${block.task_id || block.type}-${index}`}
-            className={`group relative flex gap-5 py-5 transition-opacity duration-200 md:gap-8 ${
+            className={`group relative flex min-w-0 gap-3 py-4 transition-all duration-200 sm:gap-5 md:gap-8 md:py-5 ${
               index !== blocks.length - 1 ? 'border-b border-[#155E63]/10' : ''
-            } ${block.completed ? 'opacity-55' : ''}`}
+            } ${done ? 'opacity-50' : ''} ${isNow ? 'bg-[#F8EDBF]/55' : ''} ${isNext && !isNow ? 'bg-white/40' : ''}`}
           >
-            <div className="w-16 shrink-0 pt-0.5 text-right md:w-20">
-              <div className="font-serif text-sm text-[#155E63]">{start}</div>
-              <div className="mt-1 text-[11px] tracking-wide text-[#8C8272]">
-                {block.duration_minutes ? `${block.duration_minutes}m` : ''}
-              </div>
+            <div className="w-12 shrink-0 pt-0.5 text-right sm:w-16 md:w-20">
+              <div className="font-serif text-[13px] tabular-nums text-[#155E63] sm:text-sm">{start}</div>
+              <div className="mt-0.5 font-serif text-[12px] tabular-nums text-[#8C8272] sm:text-[13px]">{end}</div>
             </div>
             <div className="relative w-px shrink-0 bg-[#155E63]/20">
               <span
-                className={`absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border ${
-                  highlight
+                className={`absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border transition-colors duration-200 ${
+                  isNow
                     ? 'border-[#D7C58A] bg-[#F3E6A5]'
-                    : isBreak
-                      ? 'border-[#6F9691] bg-[#FBF8EF]'
-                      : 'border-[#155E63] bg-[#155E63]'
+                    : isNext
+                      ? 'border-[#155E63] bg-[#FBF8EF]'
+                      : isBreak
+                        ? 'border-[#6F9691] bg-[#FBF8EF]'
+                        : 'border-[#155E63] bg-[#155E63]'
                 }`}
               />
             </div>
-            <div className={`min-w-0 flex-1 px-1 py-1 transition duration-200 md:px-4 ${highlight && !block.completed ? 'bg-[#F8EDBF]/50' : ''}`}>
-              <div className="flex items-start gap-4">
+            <div className="min-w-0 flex-1 py-0.5 pr-0 sm:px-1 md:px-4">
+              <div className="flex items-start gap-2 sm:gap-4">
                 <div className="min-w-0 flex-1">
-                  <div className={`text-[15px] text-[#173B3D] ${block.completed ? 'line-through decoration-[#6F9691]/70' : ''}`}>
-                    {block.title}
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    {(isNow || isNext) && !done && (
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#155E63]">
+                        {isNow ? 'Now' : 'Next'}
+                      </span>
+                    )}
+                    <div className={`break-words text-[15px] text-[#173B3D] transition duration-200 ${done ? 'line-through decoration-[#6F9691]/70' : ''}`}>
+                      {block.title}
+                    </div>
                   </div>
-                  <div className="mt-1 text-sm text-[#657574]">{start} → {end}</div>
                   <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-[#8C8272]">
-                    {isBreak && <span>Break</span>}
-                    {block.type === 'buffer' && <span>Buffer</span>}
-                    {linked?.priority && <span>{linked.priority} priority</span>}
-                    {linked?.category && <span>{linked.category}</span>}
-                    {linked?.energy_required && <span>{linked.energy_required} energy</span>}
+                    <span>{formatDuration(duration)}</span>
+                    {category && <span>{category}</span>}
+                    {done && <span>Kept</span>}
                   </div>
                 </div>
                 {isTask && (
                   <button
                     onClick={() => completeTask(block.task_id)}
-                    className={`min-h-11 shrink-0 border px-3.5 text-xs tracking-[0.12em] uppercase transition duration-200 ${
-                      block.completed
+                    className={`min-h-11 shrink-0 border px-3 text-[10px] tracking-[0.12em] uppercase transition duration-200 sm:px-3.5 sm:text-xs ${
+                      done
                         ? 'border-[#6F9691]/40 bg-transparent text-[#6F9691]'
-                        : 'border-[#155E63] bg-[#155E63] text-[#FBF8EF] hover:-translate-y-px hover:bg-[#103F43] active:translate-y-px'
+                        : 'border-[#155E63] bg-[#155E63] text-[#FBF8EF] hover:-translate-y-px hover:bg-[#103F43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#155E63] active:translate-y-px'
                     }`}
                   >
-                    {block.completed ? 'Done' : 'Mark done'}
+                    {done ? 'Done' : 'Mark done'}
                   </button>
                 )}
               </div>
@@ -1053,24 +1138,46 @@ const AgendaTimeline = ({ plan, tasks = [], completeTask }) => {
   );
 };
 
+const FocusStrip = ({ focus, taskById }) => {
+  if (!focus?.block) return null;
+  const block = focus.block;
+  const start = block.start_time || block.start;
+  const end = block.end_time || block.end;
+  const linked = block.task_id ? taskById[String(block.task_id)] : null;
+  if (isBlockDone(block, taskById)) return null;
+  return (
+    <div className="border-l-2 border-[#D7C58A] bg-[#F8EDBF]/40 px-4 py-4 sm:px-5">
+      <p className="text-[11px] uppercase tracking-[0.22em] text-[#155E63]">
+        {focus.kind === 'now' ? 'Current focus' : 'Up next'}
+      </p>
+      <p className="mt-2 break-words font-serif text-xl text-[#173B3D]">{block.title}</p>
+      <p className="mt-1 text-sm tabular-nums text-[#657574]">
+        {start} → {end}
+        {linked?.category ? ` · ${linked.category}` : block.type ? ` · ${block.type}` : ''}
+      </p>
+    </div>
+  );
+};
+
 const TaskRow = ({ task, onDelete, onComplete }) => {
   const due = dueMeta(task.due_date);
+  const overdue = due?.kind === 'overdue';
   return (
-    <div className="flex items-start gap-3 py-4">
+    <div className={`flex items-start gap-3 py-4 transition-colors duration-200 ${overdue ? 'border-l-2 border-[#D7C58A] pl-3' : ''}`}>
       <button
         onClick={onComplete}
         aria-label={`Complete ${task.title}`}
-        className="mt-1 h-4 w-4 shrink-0 rounded-full border border-[#155E63] transition duration-200 hover:bg-[#F3E6A5]"
+        className="mt-1 h-4 w-4 shrink-0 rounded-full border border-[#155E63] transition duration-200 hover:bg-[#F3E6A5] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#155E63]"
       />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium text-[#173B3D]">{task.title}</div>
+        <div className="break-words text-sm font-medium text-[#173B3D]">{task.title}</div>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-[#8C8272]">
           <span>{task.estimated_duration}m</span>
           <span>{task.priority}</span>
           {task.energy_required && <span>{task.energy_required} energy</span>}
           {task.category && <span>{task.category}</span>}
           {due && (
-            <span className={due.kind === 'overdue' ? 'text-[#155E63]' : ''}>{due.label}</span>
+            <span className={overdue ? 'text-[#155E63]' : ''}>{due.label}</span>
           )}
         </div>
       </div>
@@ -1288,8 +1395,9 @@ const ChoiceRow = ({ value, onChange, options, disabled }) => (
 const ErrorBanner = ({ message }) => {
   if (!message) return null;
   return (
-    <div className="mt-6 border border-[#D7C58A] bg-[#F8EDBF]/70 px-4 py-3 text-sm leading-relaxed text-[#103F43]">
-      {friendlyError(message)}
+    <div className="mt-6 border-l-2 border-[#D7C58A] bg-[#F8EDBF]/60 px-4 py-3 text-sm leading-relaxed text-[#103F43] transition-opacity duration-200">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-[#8C8272]">Needs a moment</p>
+      <p className="mt-1">{friendlyError(message)}</p>
     </div>
   );
 };
@@ -1301,9 +1409,9 @@ const BackLink = ({ onClick }) => (
 );
 
 const Stat = ({ label, value, accent, last }) => (
-  <div className={`border-[#155E63]/10 px-5 py-5 ${last ? '' : 'border-b md:border-b-0 md:border-r'}`}>
-    <div className="text-[11px] uppercase tracking-[0.18em] text-[#8C8272]">{label}</div>
-    <div className={`mt-3 font-serif text-3xl ${accent ? 'text-[#155E63]' : 'text-[#173B3D]'}`}>{value}</div>
+  <div className={`min-w-0 border-[#155E63]/10 px-4 py-4 sm:px-5 sm:py-5 ${last ? '' : 'border-b md:border-b-0 md:border-r'}`}>
+    <div className="text-[10px] uppercase tracking-[0.16em] text-[#8C8272] sm:text-[11px] sm:tracking-[0.18em]">{label}</div>
+    <div className={`mt-2 break-words font-serif text-2xl sm:mt-3 sm:text-3xl ${accent ? 'text-[#155E63]' : 'text-[#173B3D]'}`}>{value}</div>
   </div>
 );
 
@@ -1318,13 +1426,13 @@ const QuietAction = ({ onClick, label, hint }) => (
 );
 
 const TodaySkeleton = () => (
-  <div className="mb-14 animate-pulse space-y-6">
-    <div className="h-3 w-24 bg-[#155E63]/10" />
-    <div className="h-8 w-48 bg-[#155E63]/10" />
+  <div className="mb-14 space-y-6">
+    <div className="h-3 w-24 animate-pulse bg-[#155E63]/10" />
+    <div className="h-8 w-48 animate-pulse bg-[#155E63]/10" />
     <div className="space-y-3 pt-4">
-      <div className="h-16 bg-[#155E63]/8" />
-      <div className="h-16 bg-[#155E63]/8" />
-      <div className="h-16 bg-[#155E63]/8" />
+      <div className="h-16 animate-pulse bg-[#155E63]/[0.06]" />
+      <div className="h-16 animate-pulse bg-[#155E63]/[0.06]" />
+      <div className="h-16 animate-pulse bg-[#155E63]/[0.06]" />
     </div>
   </div>
 );
