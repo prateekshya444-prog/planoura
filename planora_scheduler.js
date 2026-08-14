@@ -372,7 +372,9 @@ const buildDeterministicReasoning = (ctx, sortedTasks, schedule, unscheduledTask
     parts.push(`${title} was split into multiple focus sessions to respect your ${ctx.max_focus_session}-minute focus limit.`);
   }
   for (const entry of unscheduledTasks) {
-    if (entry.scheduled_duration > 0) {
+    if (entry.reason === UNSCHEDULED_REASONS.INVALID_TASK_DURATION) {
+      parts.push(`${entry.title} has an invalid duration and was not scheduled.`);
+    } else if (entry.scheduled_duration > 0) {
       parts.push(`${entry.title} was partially scheduled (${entry.scheduled_duration}/${entry.required_duration} min); the rest could not fit.`);
     } else {
       parts.push(`${entry.title} could not fit in the remaining available time.`);
