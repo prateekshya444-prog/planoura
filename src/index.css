@@ -4,31 +4,155 @@
 
 @layer base {
   html {
-    background-color: #fbf8ef;
+    background-color: theme('colors.ivory');
   }
 
   body {
     margin: 0;
     min-height: 100vh;
-    background-color: #fbf8ef;
-    color: #173b3d;
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background-color: theme('colors.ivory');
+    color: theme('colors.ink');
+    font-family: theme('fontFamily.sans');
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   ::selection {
-    background: #f3e6a5;
-    color: #103f43;
+    background: theme('colors.butter');
+    color: theme('colors.teal.dark');
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @layer components {
+  .text-eyebrow {
+    @apply text-[11px] uppercase tracking-[0.28em];
+  }
+
+  .text-meta {
+    @apply text-[11px] uppercase tracking-[0.14em];
+  }
+
+  .text-body {
+    @apply text-[15px] leading-relaxed;
+  }
+
   .planora-input {
-    @apply w-full border border-[#155E63]/20 bg-white/70 px-4 py-3 text-[15px] text-[#173B3D] outline-none transition duration-200 placeholder:text-[#8C8272]/80 focus:border-[#155E63] focus:bg-white;
+    @apply w-full min-h-12 border border-teal/20 bg-white/70 px-4 py-3 text-[15px] text-ink outline-none transition duration-200 placeholder:text-taupe/80 focus:border-teal focus:bg-white focus-visible:ring-2 focus-visible:ring-teal/20;
   }
 
   .planora-label {
-    @apply mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-[#8C8272];
+    @apply mb-2 block text-eyebrow text-taupe;
   }
+
+  .surface {
+    @apply border border-teal/15 bg-white/50;
+  }
+
+  .surface-quiet {
+    @apply border border-teal/10 bg-white/40;
+  }
+
+  .surface-accent {
+    @apply border-l-2 border-butter bg-soft-butter/40;
+  }
+
+  .btn {
+    @apply inline-flex min-h-12 items-center justify-center px-7 text-sm tracking-[0.14em] uppercase transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:translate-y-0 disabled:opacity-50 motion-safe:hover:-translate-y-px motion-safe:active:translate-y-px;
+  }
+
+  .btn-primary {
+    @apply btn border border-teal bg-teal text-ivory hover:bg-teal-dark focus-visible:outline-teal;
+  }
+
+  .btn-secondary {
+    @apply btn border border-teal/35 bg-transparent text-teal hover:border-teal hover:bg-soft-butter/50 focus-visible:outline-teal;
+  }
+
+  .btn-ghost {
+    @apply btn border border-transparent bg-transparent text-mist hover:text-teal;
+  }
+
+  .btn-destructive {
+    @apply btn border border-red-900/20 bg-red-900/90 text-ivory hover:bg-red-950 focus-visible:outline-red-900;
+  }
+
+  .choice-chip {
+    @apply min-h-11 min-w-[5.5rem] border border-teal/20 bg-white/50 px-4 text-xs uppercase tracking-[0.16em] text-ink transition duration-200 hover:border-butter hover:bg-soft-butter/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal disabled:opacity-50;
+  }
+
+  .choice-chip-active {
+    @apply border-teal bg-teal text-ivory;
+  }
+
+  .nav-item {
+    @apply flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-left text-sm text-mist transition duration-200 hover:bg-soft-butter/60 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal;
+  }
+
+  .nav-item-active {
+    @apply bg-soft-butter/80 text-teal;
+  }
+
+  .dock-item {
+    @apply flex min-h-12 flex-col items-center justify-center gap-1 text-[10px] uppercase tracking-[0.16em] text-taupe transition duration-200;
+  }
+
+  .dock-item-active {
+    @apply text-teal;
+  }
+
+  .timeline-row {
+    @apply relative flex min-w-0 gap-3 py-4 transition-colors duration-200 sm:gap-5 md:gap-8 md:py-5;
+  }
+
+  .timeline-time {
+    @apply w-12 shrink-0 pt-0.5 text-right sm:w-16 md:w-20;
+  }
+
+  .timeline-rail {
+    @apply relative w-px shrink-0 bg-teal/20;
+  }
+
+  .timeline-dot {
+    @apply absolute left-1/2 top-1.5 h-2.5 w-2.5 -translate-x-1/2 rounded-full border border-teal bg-teal;
+  }
+
+  .timeline-body {
+    @apply min-w-0 flex-1 py-0.5;
+  }
+
+  .timeline-now {
+    @apply bg-soft-butter/55;
+  }
+
+  .timeline-next {
+    @apply bg-white/40;
+  }
+
+  .timeline-break .timeline-dot,
+  .timeline-buffer .timeline-dot {
+    @apply border-teal-muted bg-ivory;
+  }
+
+  .timeline-done {
+    @apply opacity-50;
+  }
+}
+
+@layer utilities {
+  .motion-safe\:animate-fade-in {
+    @apply motion-safe:animate-[fadeIn_200ms_ease-out];
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
